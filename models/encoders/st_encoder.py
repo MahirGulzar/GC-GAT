@@ -48,25 +48,30 @@ class STEncoder(PredictionEncoder):
 
         super().__init__()
 
+        self.args = args
+
         # Target agent embeddings
         self.target_agent_emb = nn.Linear(args['target_agent_feat_size'], args['target_agent_emb_size'])
         self.target_agent_emb_enc = nn.Linear(args['target_agent_emb_size'], args['target_agent_enc_size'])
+        self.target_agent_temporal_encoder_layer = TransformerEncoderLayer(d_model=args['target_agent_enc_size'], nhead=8)
+        self.target_agent_temporal_encoder = TransformerEncoder(self.target_agent_temporal_encoder_layer, 1)
+
+        # self.target_agent_emb_enc = nn.Linear(args['target_agent_emb_size'], args['target_agent_enc_size'])
 
         # self.target_agent_enc = nn.GRU(args['target_agent_emb_size'], args['target_agent_enc_size'], batch_first=True)
 
         # Surrounding agent embeddings
         self.nbr_emb = nn.Linear(args['nbr_feat_size'] + 1, args['nbr_emb_size'])
         self.nbr_emb_enc = nn.Linear(args['nbr_emb_size'], args['nbr_enc_size'])
-
-        # self.nbr_enc = nn.GRU(args['nbr_emb_size'], args['nbr_enc_size'], batch_first=True)
-
-        self.target_agent_temporal_encoder_layer = TransformerEncoderLayer(d_model=args['target_agent_enc_size'], nhead=8)
         self.nbr_agent_temporal_encoder_layer = TransformerEncoderLayer(d_model=args['nbr_enc_size'], nhead=8)
+        self.nbr_agent_temporal_encoder = TransformerEncoder(self.nbr_agent_temporal_encoder_layer, 1)
+        # self.nbr_emb_enc = nn.Linear(args['nbr_emb_size'], args['nbr_enc_size'])
+        # self.nbr_enc = nn.GRU(args['nbr_emb_size'], args['nbr_enc_size'], batch_first=True)
 
 
         # Independent Temporal Encoders
-        self.target_agent_temporal_encoder = TransformerEncoder(self.target_agent_temporal_encoder_layer, 1)
-        self.nbr_agent_temporal_encoder = TransformerEncoder(self.nbr_agent_temporal_encoder_layer, 1)
+        # self.target_agent_temporal_encoder = TransformerEncoder(self.target_agent_temporal_encoder_layer, 1)
+        # self.nbr_agent_temporal_encoder = TransformerEncoder(self.nbr_agent_temporal_encoder_layer, 1)
 
 
         self.target_agent_conv1d = nn.Conv1d(args['target_agent_feat_size'], args['target_agent_enc_size'], args['target_agent_enc_size'])
@@ -80,17 +85,17 @@ class STEncoder(PredictionEncoder):
         # Independent Spatial Encoders
         # TODO: Replace these with TransformModel that uses masks
 
-        target_agent_spatial_layers = TransformerEncoderLayer(args['target_agent_enc_size'], nhead, nhid, dropout)
-        nbr_agent_spatial_layers = TransformerEncoderLayer(args['nbr_enc_size'], nhead, nhid, dropout)
+        # target_agent_spatial_layers = TransformerEncoderLayer(args['target_agent_enc_size'], nhead, nhid, dropout)
+        # nbr_agent_spatial_layers = TransformerEncoderLayer(args['nbr_enc_size'], nhead, nhid, dropout)
 
-        self.target_agent_spatial_encoder = TransformerEncoder(target_agent_spatial_layers, nlayers)
-        self.nbr_agent_spatial_encoder = TransformerEncoder(nbr_agent_spatial_layers, nlayers)
+        # self.target_agent_spatial_encoder = TransformerEncoder(target_agent_spatial_layers, nlayers)
+        # self.nbr_agent_spatial_encoder = TransformerEncoder(nbr_agent_spatial_layers, nlayers)
 
 
 
-        self.target_agent_fusion = nn.Linear(args['target_agent_enc_size'] * 2, 32)
-        self.nbr_agent_fusion = nn.Linear(args['nbr_enc_size'] * 2, 32)
-        self.agent_nbr_fusion = nn.Linear(args['target_agent_enc_size'] + args['nbr_enc_size'], 32)
+        # self.target_agent_fusion = nn.Linear(args['target_agent_enc_size'] * 2, 32)
+        # self.nbr_agent_fusion = nn.Linear(args['nbr_enc_size'] * 2, 32)
+        # self.agent_nbr_fusion = nn.Linear(args['target_agent_enc_size'] + args['nbr_enc_size'], 32)
 
 
 
@@ -187,8 +192,8 @@ class STEncoder(PredictionEncoder):
 
         target_agent_feats = inputs['target_agent_representation']
 
-        print(target_agent_feats[0][1])
-        print(inputs['surrounding_agent_representation']['vehicles'][0][1])
+        # print(target_agent_feats[0][1])
+        # print(inputs['surrounding_agent_representation']['vehicles'][0][1])
         # print(inputs['surrounding_agent_representation']['vehicles'].shape)
 
         target_agent_emb = self.dropout_in(self.leaky_relu(self.target_agent_emb(target_agent_feats)))
@@ -205,8 +210,12 @@ class STEncoder(PredictionEncoder):
         # print(target_agent_emb.shape)
         # print("target_agent_emb_enc.shape --> ", target_agent_emb.shape)
 
-        target_agent_pos_enc_summer = Summer(PositionalEncoding1D(target_agent_emb.shape[len(target_agent_emb.shape)-1]))
-        target_agent_emb = target_agent_pos_enc_summer(target_agent_emb)
+        target_agent_pos_enc  = PositionalEncoding1D(self.args['target_agent_enc_size'])
+        target_agent_emb = target_agent_pos_enc(target_agent_emb)
+
+        # print(target_agent_pos_enc(target_agent_emb).shape)
+        # print(target_agent_pos_enc(target_agent_emb))
+        # target_agent_emb = target_agent_pos_enc_summer(target_agent_emb)
         
         # print("positional encoding")
         # print(target_agent_emb.shape)
@@ -250,31 +259,26 @@ class STEncoder(PredictionEncoder):
         # Encode surrounding agents
         
         nbr_vehicle_feats = inputs['surrounding_agent_representation']['vehicles']
-        print("nbr_vehicle_feats.shape -->", nbr_vehicle_feats.shape)
-        print(nbr_vehicle_feats[0][0])
+        # print("nbr_vehicle_feats.shape -->", nbr_vehicle_feats.shape)
+        # print(nbr_vehicle_feats[0][0])
         nbr_vehicle_feats = torch.cat((nbr_vehicle_feats, torch.zeros_like(nbr_vehicle_feats[:, :, :, 0:1])), dim=-1)
-        print("nbr_vehicle_feats.shape -->", nbr_vehicle_feats.shape)
+        # print("nbr_vehicle_feats.shape -->", nbr_vehicle_feats.shape)
         nbr_vehicle_masks = inputs['surrounding_agent_representation']['vehicle_masks']
-        print("nbr_vehicle_masks.shape -->", nbr_vehicle_masks.shape)
-        print(nbr_vehicle_masks[0][0])
+        # print("nbr_vehicle_masks.shape -->", nbr_vehicle_masks.shape)
+        # print(nbr_vehicle_masks[0][0])
 
         nbr_vehicle_emb = self.dropout_in2(self.leaky_relu(self.nbr_emb(nbr_vehicle_feats)))
         nbr_vehicle_emb = self.nbr_emb_enc(nbr_vehicle_emb)
 
-        print("nbr_vehicle_emb.shape --> ", nbr_vehicle_emb.shape)
+        # print("nbr_vehicle_emb.shape --> ", nbr_vehicle_emb.shape)
 
-        nbr_vehicle_emb_summer = Summer(PositionalEncoding2D(nbr_vehicle_emb.shape[len(nbr_vehicle_emb.shape)-1]))
-        nbr_vehicle_emb = nbr_vehicle_emb_summer(nbr_vehicle_emb)
+        nbr_vehicle_emb_pos_enc = PositionalEncoding2D(self.args['nbr_enc_size'])
+        nbr_vehicle_emb = nbr_vehicle_emb_pos_enc(nbr_vehicle_emb)
 
 
         nbr_temporal_vehicle_enc = self.variable_size_transform_encode(nbr_vehicle_emb, nbr_vehicle_masks, self.nbr_agent_temporal_encoder)
-        nbr_spatial_vehicle_enc = self.variable_size_transform_encode(nbr_vehicle_emb, nbr_vehicle_masks, self.nbr_agent_spatial_encoder)
 
-        # print("nbr_temporal_vehicle_enc.shape --> ", nbr_temporal_vehicle_enc.shape)
-        # print("nbr_spatial_vehicle_enc.shape --> ", nbr_spatial_vehicle_enc.shape)
-
-        nbr_vehicle_concat_enc = torch.cat((nbr_temporal_vehicle_enc, nbr_spatial_vehicle_enc), dim=2)
-        nbr_vehicle_enc = self.nbr_agent_fusion(nbr_vehicle_concat_enc)
+        nbr_vehicle_enc = nbr_temporal_vehicle_enc
 
         nbr_ped_feats = inputs['surrounding_agent_representation']['pedestrians']
         nbr_ped_feats = torch.cat((nbr_ped_feats, torch.ones_like(nbr_ped_feats[:, :, :, 0:1])), dim=-1)
@@ -284,51 +288,22 @@ class STEncoder(PredictionEncoder):
         nbr_pedestrian_emb = self.dropout_in2(self.leaky_relu(self.nbr_emb(nbr_ped_feats)))
         nbr_pedestrian_emb = self.nbr_emb_enc(nbr_pedestrian_emb)
 
-        nbr_pedestrian_emb_summer = Summer(PositionalEncoding2D(nbr_pedestrian_emb.shape[len(nbr_pedestrian_emb.shape)-1]))
-        nbr_pedestrian_emb = nbr_pedestrian_emb_summer(nbr_pedestrian_emb)
+
+        nbr_pedestrian_emb_pos_enc = PositionalEncoding2D(self.args['nbr_enc_size'])
+        nbr_pedestrian_emb = nbr_pedestrian_emb_pos_enc(nbr_pedestrian_emb)
 
         nbr_temporal_pedestrian_enc = self.variable_size_transform_encode(nbr_pedestrian_emb, nbr_ped_masks, self.nbr_agent_temporal_encoder)
-        nbr_spatial_pedestrian_enc = self.variable_size_transform_encode(nbr_pedestrian_emb, nbr_ped_masks, self.nbr_agent_spatial_encoder)
-
-        # print("nbr_temporal_pedestrian_enc.shape --> ", nbr_temporal_pedestrian_enc.shape)
-        # print("nbr_spatial_pedestrian_enc.shape --> ", nbr_spatial_pedestrian_enc.shape)
-
-
-        nbr_pedestrian_concat_enc = torch.cat((nbr_temporal_pedestrian_enc, nbr_spatial_pedestrian_enc), dim=2)
-        nbr_pedestrian_enc = self.nbr_agent_fusion(nbr_pedestrian_concat_enc)
+        nbr_pedestrian_enc = nbr_temporal_pedestrian_enc
 
 
         
         #---------------------------------------------------------------------------------------
         # Encode target agent
-        # target_agent_feats = inputs['target_agent_representation']
-        # target_agent_embedding = self.leaky_relu(self.target_agent_emb(target_agent_feats))
-        # _, target_agent_enc = self.target_agent_enc(target_agent_embedding)
-        # target_agent_enc = target_agent_enc.squeeze(0)
-
         # Encode lane nodes
         lane_node_feats = inputs['map_representation']['lane_node_feats']
         lane_node_masks = inputs['map_representation']['lane_node_masks']
         lane_node_embedding = self.leaky_relu(self.node_emb(lane_node_feats))
         lane_node_enc = self.variable_size_gru_encode(lane_node_embedding, lane_node_masks, self.node_encoder)
-
-        # Encode surrounding agents
-        # nbr_vehicle_feats = inputs['surrounding_agent_representation']['vehicles']
-        # nbr_vehicle_feats = torch.cat((nbr_vehicle_feats, torch.zeros_like(nbr_vehicle_feats[:, :, :, 0:1])), dim=-1)
-        # nbr_vehicle_masks = inputs['surrounding_agent_representation']['vehicle_masks']
-        # nbr_vehicle_embedding = self.leaky_relu(self.nbr_emb(nbr_vehicle_feats))
-        # nbr_vehicle_enc = self.variable_size_gru_encode(nbr_vehicle_embedding, nbr_vehicle_masks, self.nbr_enc)
-        # nbr_ped_feats = inputs['surrounding_agent_representation']['pedestrians']
-        # nbr_ped_feats = torch.cat((nbr_ped_feats, torch.ones_like(nbr_ped_feats[:, :, :, 0:1])), dim=-1)
-        # nbr_ped_masks = inputs['surrounding_agent_representation']['pedestrian_masks']
-        # nbr_ped_embedding = self.leaky_relu(self.nbr_emb(nbr_ped_feats))
-        # nbr_ped_enc = self.variable_size_gru_encode(nbr_ped_embedding, nbr_ped_masks, self.nbr_enc)
-
-        
-
-        # print("nbr_vehicle_enc.shape", nbr_vehicle_enc.shape)
-        # print("nbr_pedestrian_enc.shape", nbr_pedestrian_enc.shape)
-
 
         # Agent-node attention
         nbr_encodings = torch.cat((nbr_vehicle_enc, nbr_pedestrian_enc), dim=1)
@@ -374,7 +349,7 @@ class STEncoder(PredictionEncoder):
             encodings['s_next'] = inputs['map_representation']['s_next']
             encodings['edge_type'] = inputs['map_representation']['edge_type']
 
-        print("-------------------")
+        # print("-------------------")
 
         return encodings
 
@@ -424,21 +399,21 @@ class STEncoder(PredictionEncoder):
 
         # Form a large batch of all sequences in the batch
         masks_for_batching = ~masks[:, :, :, 0].bool()
-        print("masks_for_batching.shape", masks_for_batching.shape)
-        print(masks_for_batching[0][0])
+        # print("masks_for_batching.shape", masks_for_batching.shape)
+        # print(masks_for_batching[0][0])
         masks_for_batching = masks_for_batching.any(dim=-1).unsqueeze(2).unsqueeze(3)
-        print("masks_for_batching.shape after unsqueeze", masks_for_batching.shape)
-        print(masks_for_batching[0][0])
-        print("feat_embedding.shape", feat_embedding.shape)
-        print(feat_embedding[0][0])
+        # print("masks_for_batching.shape after unsqueeze", masks_for_batching.shape)
+        # print(masks_for_batching[0][0])
+        # print("feat_embedding.shape", feat_embedding.shape)
+        # print(feat_embedding[0][0])
         feat_embedding_batched = torch.masked_select(feat_embedding, masks_for_batching)
-        print("feat_embedding_batched.shape after masking", feat_embedding_batched.shape)
-        print(feat_embedding_batched[0])
+        # print("feat_embedding_batched.shape after masking", feat_embedding_batched.shape)
+        # print(feat_embedding_batched[0])
         feat_embedding_batched = feat_embedding_batched.view(-1, feat_embedding.shape[2], feat_embedding.shape[3])
 
-        print("feat_embedding_batched.shape after masking and viewing", feat_embedding_batched.shape)
-        print(feat_embedding_batched[0])
-        print("oooooooooooooooooooooooooooooooooooooooooooooooooo")
+        # print("feat_embedding_batched.shape after masking and viewing", feat_embedding_batched.shape)
+        # print(feat_embedding_batched[0])
+        # print("oooooooooooooooooooooooooooooooooooooooooooooooooo")
 
         # # Pack padded sequences
         # seq_lens = torch.sum(1 - masks[:, :, :, 0], dim=-1)
