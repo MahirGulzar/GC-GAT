@@ -45,6 +45,8 @@ class Trainer:
         # Initialize model
         self.model = initialize_prediction_model(cfg['encoder_type'], cfg['aggregator_type'], cfg['decoder_type'],
                                                  cfg['encoder_args'], cfg['aggregator_args'], cfg['decoder_args'])
+        print(self.model)
+        print("-----------------------------------------------------")
         self.model = self.model.float().to(device)
 
         # Initialize optimizer and scheduler

@@ -11,6 +11,7 @@ from models.model import PredictionModel
 from models.encoders.raster_encoder import RasterEncoder
 from models.encoders.polyline_subgraph import PolylineSubgraphs
 from models.encoders.pgp_encoder import PGPEncoder
+from models.encoders.st_encoder import STEncoder
 from models.aggregators.concat import Concat
 from models.aggregators.global_attention import GlobalAttention
 from models.aggregators.goal_conditioned import GoalConditioned
@@ -81,7 +82,8 @@ def initialize_encoder(encoder_type: str, encoder_args: Dict):
     encoder_mapping = {
         'raster_encoder': RasterEncoder,
         'polyline_subgraphs': PolylineSubgraphs,
-        'pgp_encoder': PGPEncoder
+        'pgp_encoder': PGPEncoder,
+        'st_encoder': STEncoder
     }
 
     return encoder_mapping[encoder_type](encoder_args)

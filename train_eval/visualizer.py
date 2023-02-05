@@ -120,6 +120,11 @@ class Visualizer:
             i_t = data['inputs']['instance_token']
             s_t = data['inputs']['sample_token']
 
+            print(i_t)
+            print(s_t)
+
+            print("------------------------")
+
             # Get raster map
             hd_map = raster_maps.make_input_representation(i_t, s_t)
             r, g, b = hd_map[:, :, 0] / 255, hd_map[:, :, 1] / 255, hd_map[:, :, 2] / 255

@@ -1,0 +1,13 @@
+.ipynb_checkpoints
+__pycache__/
+*.py[cod]
+
+preprocessed/
+PGP_lr-scheduler/
+output/
+datasets/nuScenes/maps
+datasets/nuScenes/samples
+datasets/nuScenes/sweeps
+datasets/nuScenes/v1.0-mini
+datasets/nuScenes/v1.0-trainval
+
