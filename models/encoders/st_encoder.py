@@ -9,6 +9,7 @@ from positional_encodings.torch_encodings import PositionalEncodingPermute1D, Po
 
 import numpy as np
 import torch
+from torch.nn import TransformerEncoder, TransformerEncoderLayer
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn.utils.rnn import pack_padded_sequence
@@ -52,9 +53,10 @@ class STEncoder(PredictionEncoder):
 
         # Target agent embeddings
         self.target_agent_emb = nn.Linear(args['target_agent_feat_size'], args['target_agent_emb_size'])
+        self.target_agent_temporal_encoder_layer = TransformerEncoderLayer(d_model=args['target_agent_emb_size'], nhead=8)
+        self.target_agent_temporal_encoder = TransformerEncoder(self.target_agent_temporal_encoder_layer, 2)
+        self.dropout_target = nn.Dropout(0.2)
         self.target_agent_emb_enc = nn.Linear(args['target_agent_emb_size'], args['target_agent_enc_size'])
-        self.target_agent_temporal_encoder_layer = TransformerEncoderLayer(d_model=args['target_agent_enc_size'], nhead=8)
-        self.target_agent_temporal_encoder = TransformerEncoder(self.target_agent_temporal_encoder_layer, 1)
 
         # self.target_agent_emb_enc = nn.Linear(args['target_agent_emb_size'], args['target_agent_enc_size'])
 
@@ -62,9 +64,10 @@ class STEncoder(PredictionEncoder):
 
         # Surrounding agent embeddings
         self.nbr_emb = nn.Linear(args['nbr_feat_size'] + 1, args['nbr_emb_size'])
+        self.nbr_agent_temporal_encoder_layer = TransformerEncoderLayer(d_model=args['nbr_emb_size'], nhead=8)
+        self.nbr_agent_temporal_encoder = TransformerEncoder(self.nbr_agent_temporal_encoder_layer, 2)
+        self.dropout_nbr = nn.Dropout(0.2)
         self.nbr_emb_enc = nn.Linear(args['nbr_emb_size'], args['nbr_enc_size'])
-        self.nbr_agent_temporal_encoder_layer = TransformerEncoderLayer(d_model=args['nbr_enc_size'], nhead=8)
-        self.nbr_agent_temporal_encoder = TransformerEncoder(self.nbr_agent_temporal_encoder_layer, 1)
         # self.nbr_emb_enc = nn.Linear(args['nbr_emb_size'], args['nbr_enc_size'])
         # self.nbr_enc = nn.GRU(args['nbr_emb_size'], args['nbr_enc_size'], batch_first=True)
 
@@ -191,109 +194,48 @@ class STEncoder(PredictionEncoder):
         # Encode target agent
 
         target_agent_feats = inputs['target_agent_representation']
-
-        # print(target_agent_feats[0][1])
-        # print(inputs['surrounding_agent_representation']['vehicles'][0][1])
-        # print(inputs['surrounding_agent_representation']['vehicles'].shape)
-
+        target_agent_pos_enc  = PositionalEncoding1D(self.args['target_agent_feat_size'])
+        target_agent_feats = target_agent_pos_enc(target_agent_feats)
         target_agent_emb = self.dropout_in(self.leaky_relu(self.target_agent_emb(target_agent_feats)))
 
         
-
-        
-
-        # target_agent_pos_enc = PositionalEncodingPermute1D()
-
-        # print("target_agent_emb.shape --> ", target_agent_emb.shape)
-        target_agent_emb = self.target_agent_emb_enc(target_agent_emb)
-
-        # print(target_agent_emb.shape)
-        # print("target_agent_emb_enc.shape --> ", target_agent_emb.shape)
-
-        target_agent_pos_enc  = PositionalEncoding1D(self.args['target_agent_enc_size'])
-        target_agent_emb = target_agent_pos_enc(target_agent_emb)
-
-        # print(target_agent_pos_enc(target_agent_emb).shape)
-        # print(target_agent_pos_enc(target_agent_emb))
-        # target_agent_emb = target_agent_pos_enc_summer(target_agent_emb)
-        
-        # print("positional encoding")
-        # print(target_agent_emb.shape)
-        # print(target_agent_emb)
-
-        # print("------------------------")
-
-
-        target_agent_temporal_enc = self.target_agent_temporal_encoder(target_agent_emb)
-        # target_agent_spatial_enc = self.target_agent_spatial_encoder(target_agent_emb)
-
-        # print("target_agent_temporal_enc.shape --> ", target_agent_temporal_enc.shape)
-        # print("target_agent_spatial_enc.shape --> ", target_agent_spatial_enc.shape)
-
-        ##target_agent_temporal_enc = target_agent_temporal_enc.squeeze(0)
-        ##target_agent_spatial_enc = target_agent_spatial_enc.squeeze(0)
-
-        # print("target_agent_temporal_enc.shape squeeze(0) --> ", target_agent_temporal_enc.shape)
-        # print("target_agent_spatial_enc.shape squeeze(0)--> ", target_agent_spatial_enc.shape)
-
-        ### target_agent_concat_enc = torch.cat((target_agent_temporal_enc, target_agent_spatial_enc), dim=1)
-        # print(target_agent_concat_enc.shape)
-        # target_agent_enc = target_agent_concat_enc.squeeze(0).permute(1, 0, 2)
-
-
-        target_agent_enc = self.target_agent_conv1d(target_agent_temporal_enc)
-        # print("target_agent_enc.shape) --> ", target_agent_enc.shape)
-
+        # target_agent_emb = target_agent_pos_enc(target_agent_emb)
+        target_agent_temporal_enc = self.target_agent_temporal_encoder(self.leaky_relu(target_agent_emb))
+        target_agent_enc = self.dropout_target(self.leaky_relu(self.target_agent_emb_enc(target_agent_temporal_enc)))
+        target_agent_enc = self.target_agent_conv1d(target_agent_enc)
         target_agent_enc = target_agent_enc.permute(2, 0, 1)
-        # print("target_agent_enc.permute(2, 0, 1)) --> ", target_agent_enc.shape)
-
         target_agent_enc = target_agent_enc.squeeze(0)
-        # print("target_agent_enc.squeeze(0)) --> ", target_agent_enc.shape)
-
-        # target_agent_enc = self.target_agent_fusion(target_agent_concat_enc)
-        # print("target_agent_enc.shape", target_agent_enc.shape)
-        # print("target_agent_enc.permute(1, 0, 2).shape", target_agent_enc.permute(1, 0, 2).shape)
-        
 
 
         # Encode surrounding agents
         
         nbr_vehicle_feats = inputs['surrounding_agent_representation']['vehicles']
-        # print("nbr_vehicle_feats.shape -->", nbr_vehicle_feats.shape)
-        # print(nbr_vehicle_feats[0][0])
         nbr_vehicle_feats = torch.cat((nbr_vehicle_feats, torch.zeros_like(nbr_vehicle_feats[:, :, :, 0:1])), dim=-1)
-        # print("nbr_vehicle_feats.shape -->", nbr_vehicle_feats.shape)
         nbr_vehicle_masks = inputs['surrounding_agent_representation']['vehicle_masks']
-        # print("nbr_vehicle_masks.shape -->", nbr_vehicle_masks.shape)
-        # print(nbr_vehicle_masks[0][0])
 
         nbr_vehicle_emb = self.dropout_in2(self.leaky_relu(self.nbr_emb(nbr_vehicle_feats)))
-        nbr_vehicle_emb = self.nbr_emb_enc(nbr_vehicle_emb)
-
         # print("nbr_vehicle_emb.shape --> ", nbr_vehicle_emb.shape)
+        nbr_vehicle_enc = self.variable_size_transform_encode(nbr_vehicle_emb, nbr_vehicle_masks, self.nbr_agent_temporal_encoder)
+        # print("nbr_vehicle_enc.shape --> ", nbr_vehicle_enc.shape)
+        # nbr_vehicle_enc = self.dropout_nbr(self.leaky_relu(nbr_vehicle_enc))
+        nbr_vehicle_enc = self.dropout_nbr(self.leaky_relu(self.nbr_emb_enc(nbr_vehicle_enc)))
+        # print("nbr_vehicle_enc.shape --> ", nbr_vehicle_enc.shape)
+        # nbr_vehicle_enc = nbr_temporal_vehicle_enc
 
-        nbr_vehicle_emb_pos_enc = PositionalEncoding2D(self.args['nbr_enc_size'])
-        nbr_vehicle_emb = nbr_vehicle_emb_pos_enc(nbr_vehicle_emb)
-
-
-        nbr_temporal_vehicle_enc = self.variable_size_transform_encode(nbr_vehicle_emb, nbr_vehicle_masks, self.nbr_agent_temporal_encoder)
-
-        nbr_vehicle_enc = nbr_temporal_vehicle_enc
 
         nbr_ped_feats = inputs['surrounding_agent_representation']['pedestrians']
         nbr_ped_feats = torch.cat((nbr_ped_feats, torch.ones_like(nbr_ped_feats[:, :, :, 0:1])), dim=-1)
         nbr_ped_masks = inputs['surrounding_agent_representation']['pedestrian_masks']
 
-
         nbr_pedestrian_emb = self.dropout_in2(self.leaky_relu(self.nbr_emb(nbr_ped_feats)))
-        nbr_pedestrian_emb = self.nbr_emb_enc(nbr_pedestrian_emb)
-
-
-        nbr_pedestrian_emb_pos_enc = PositionalEncoding2D(self.args['nbr_enc_size'])
-        nbr_pedestrian_emb = nbr_pedestrian_emb_pos_enc(nbr_pedestrian_emb)
-
-        nbr_temporal_pedestrian_enc = self.variable_size_transform_encode(nbr_pedestrian_emb, nbr_ped_masks, self.nbr_agent_temporal_encoder)
-        nbr_pedestrian_enc = nbr_temporal_pedestrian_enc
+        # nbr_pedestrian_emb_pos_enc = PositionalEncoding2D(self.args['nbr_enc_size'])
+        # nbr_pedestrian_emb = nbr_pedestrian_emb_pos_enc(nbr_pedestrian_emb)
+        # print("nbr_pedestrian_emb.shape --> ", nbr_pedestrian_emb.shape)
+        nbr_pedestrian_enc = self.variable_size_transform_encode(nbr_pedestrian_emb, nbr_ped_masks, self.nbr_agent_temporal_encoder)
+        # print("nbr_pedestrian_enc.shape --> ", nbr_pedestrian_enc.shape)
+        # nbr_pedestrian_enc = self.dropout_nbr(self.leaky_relu(nbr_pedestrian_enc))
+        nbr_pedestrian_enc = self.dropout_nbr(self.leaky_relu(self.nbr_emb_enc(nbr_pedestrian_enc)))
+        # print("nbr_pedestrian_enc.shape --> ", nbr_pedestrian_enc.shape)
 
 
         
@@ -389,9 +331,10 @@ class STEncoder(PredictionEncoder):
             encoding = torch.zeros((batch_size, max_num, hidden_state_size), device=device)
 
         return encoding
+    
 
     @staticmethod
-    def variable_size_transform_encode(feat_embedding: torch.Tensor, masks: torch.Tensor, transform_encoder: nn.Module) -> torch.Tensor:
+    def feature_masker(feat_embedding: torch.Tensor, masks: torch.Tensor, transform_encoder: nn.Module) -> torch.Tensor:
         """
         Returns an encoding for a batch of inputs where each sample in the batch is a set of a variable number
         of sequences, of variable lengths.
@@ -399,30 +342,9 @@ class STEncoder(PredictionEncoder):
 
         # Form a large batch of all sequences in the batch
         masks_for_batching = ~masks[:, :, :, 0].bool()
-        # print("masks_for_batching.shape", masks_for_batching.shape)
-        # print(masks_for_batching[0][0])
         masks_for_batching = masks_for_batching.any(dim=-1).unsqueeze(2).unsqueeze(3)
-        # print("masks_for_batching.shape after unsqueeze", masks_for_batching.shape)
-        # print(masks_for_batching[0][0])
-        # print("feat_embedding.shape", feat_embedding.shape)
-        # print(feat_embedding[0][0])
         feat_embedding_batched = torch.masked_select(feat_embedding, masks_for_batching)
-        # print("feat_embedding_batched.shape after masking", feat_embedding_batched.shape)
-        # print(feat_embedding_batched[0])
         feat_embedding_batched = feat_embedding_batched.view(-1, feat_embedding.shape[2], feat_embedding.shape[3])
-
-        # print("feat_embedding_batched.shape after masking and viewing", feat_embedding_batched.shape)
-        # print(feat_embedding_batched[0])
-        # print("oooooooooooooooooooooooooooooooooooooooooooooooooo")
-
-        # # Pack padded sequences
-        # seq_lens = torch.sum(1 - masks[:, :, :, 0], dim=-1)
-        # seq_lens_batched = seq_lens[seq_lens != 0].cpu()
-
-
-
-        # feat_embedding_packed = pack_padded_sequence(feat_embedding_batched, seq_lens_batched,
-        #                                                  batch_first=True, enforce_sorted=False)
 
         # Encode
         encoding_batched = transform_encoder(feat_embedding_batched)
@@ -433,25 +355,33 @@ class STEncoder(PredictionEncoder):
         encoding = torch.zeros(masks_for_scattering.shape, device=device)
         encoding = encoding.masked_scatter(masks_for_scattering, encoding_batched)
 
+        return encoding
 
-        # if len(seq_lens_batched) != 0:
-        #     feat_embedding_packed = pack_padded_sequence(feat_embedding_batched, seq_lens_batched,
-        #                                                  batch_first=True, enforce_sorted=False)
+    def variable_size_transform_encode(self, feat_embedding: torch.Tensor, masks: torch.Tensor, transform_encoder: nn.Module) -> torch.Tensor:
+        """
+        Returns an encoding for a batch of inputs where each sample in the batch is a set of a variable number
+        of sequences, of variable lengths.
+        """
 
-        #     # Encode
-        #     encoding_batched = transform_encoder(feat_embedding_packed)
-        #     encoding_batched = encoding_batched.squeeze(0)
 
-        #     # Scatter back to appropriate batch index
-        #     masks_for_scattering = masks_for_batching.squeeze(3).repeat(1, 1, encoding_batched.shape[-1])
-        #     encoding = torch.zeros(masks_for_scattering.shape, device=device)
-        #     encoding = encoding.masked_scatter(masks_for_scattering, encoding_batched)
+        # Form a large batch of all sequences in the batch
+        masks_for_batching = ~masks[:, :, :, 0].bool()
+        masks_for_batching = masks_for_batching.any(dim=-1).unsqueeze(2).unsqueeze(3)
+        feat_embedding_batched = torch.masked_select(feat_embedding, masks_for_batching)
+        feat_embedding_batched = feat_embedding_batched.view(-1, feat_embedding.shape[2], feat_embedding.shape[3])
 
-        # else:
-        #     batch_size = feat_embedding.shape[0]
-        #     max_num = feat_embedding.shape[1]
-        #     hidden_state_size = transform_encoder.hidden_size
-        #     encoding = torch.zeros((batch_size, max_num, hidden_state_size), device=device)
+
+        nbr_pos_enc = PositionalEncoding1D(self.args['nbr_emb_size'])
+        feat_embedding_batched = nbr_pos_enc(feat_embedding_batched)
+
+        # Encode
+        encoding_batched = transform_encoder(feat_embedding_batched)
+        encoding_batched = encoding_batched.squeeze(0)
+
+        # Scatter back to appropriate batch index
+        masks_for_scattering = masks_for_batching.squeeze(3).repeat(1, 1, encoding_batched.shape[-1])
+        encoding = torch.zeros(masks_for_scattering.shape, device=device)
+        encoding = encoding.masked_scatter(masks_for_scattering, encoding_batched)
 
         return encoding
 
@@ -537,96 +467,6 @@ class GAT(nn.Module):
         att_op, _ = self.att(queries, keys, vals, attn_mask=~adj_mat)
 
         return att_op.permute(1, 0, 2)
-
-
-class TransformerEncoderLayer(nn.Module):
-
-    def __init__(self, d_model, nhead, dim_feedforward=2048, dropout=0, activation="relu", batch_first=True):
-        super(TransformerEncoderLayer, self).__init__()
-        # self.self_attn = MultiheadAttention(d_model, nhead, dropout=dropout)
-        self.self_attn = nn.MultiheadAttention(d_model, nhead, dropout=dropout)
-        # Implementation of Feedforward model
-        self.linear1 = nn.Linear(d_model, dim_feedforward)
-        self.dropout = nn.Dropout(dropout)
-        self.linear2 = nn.Linear(dim_feedforward, d_model)
-
-        self.norm1 = nn.LayerNorm(d_model)
-        self.norm2 = nn.LayerNorm(d_model)
-        self.dropout1 = nn.Dropout(dropout)
-        self.dropout2 = nn.Dropout(dropout)
-
-        self.activation = _get_activation_fn(activation)
-
-    def forward(self, src, src_mask=None, src_key_padding_mask=None):
-        r"""Pass the input through the encoder layer.
-
-        Args:
-            src: the sequnce to the encoder layer (required).
-            src_mask: the mask for the src sequence (optional).
-            src_key_padding_mask: the mask for the src keys per batch (optional).
-
-        Shape:
-            see the docs in Transformer class.
-        """
-        src2, attn = self.self_attn(src, src, src, attn_mask=src_mask,
-                                    key_padding_mask=src_key_padding_mask)
-        src = src + self.dropout1(src2)
-        src = self.norm1(src)
-
-        if hasattr(self, "activation"):
-            src2 = self.linear2(self.dropout(self.activation(self.linear1(src))))
-        else:  # for backward compatibility
-            src2 = self.linear2(self.dropout(F.relu(self.linear1(src))))
-
-        src = src + self.dropout2(src2)
-        src = self.norm2(src)
-        return src, attn
-
-
-class TransformerEncoder(nn.Module):
-    r"""TransformerEncoder is a stack of N encoder layers
-
-    Args:
-        encoder_layer: an instance of the TransformerEncoderLayer() class (required).
-        num_layers: the number of sub-encoder-layers in the encoder (required).
-        norm: the layer normalization component (optional).
-
-    Examples::
-        >>> encoder_layer = nn.TransformerEncoderLayer(d_model=512, nhead=8)
-        >>> transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=6)
-        >>> src = torch.rand(10, 32, 512)
-        >>> out = transformer_encoder(src)
-    """
-
-    def __init__(self, encoder_layer, num_layers, norm=None):
-        super(TransformerEncoder, self).__init__()
-        self.layers = _get_clones(encoder_layer, num_layers)
-        self.num_layers = num_layers
-        self.norm = norm
-
-    def forward(self, src, mask=None, src_key_padding_mask=None):
-        r"""Pass the input through the encoder layers in turn.
-
-        Args:
-            src: the sequnce to the encoder (required).
-            mask: the mask for the src sequence (optional).
-            src_key_padding_mask: the mask for the src keys per batch (optional).
-
-        Shape:
-            see the docs in Transformer class.
-        """
-        output = src
-
-        atts = []
-
-        for i in range(self.num_layers):
-            output, attn = self.layers[i](output, src_mask=mask,
-                                          src_key_padding_mask=src_key_padding_mask)
-            atts.append(attn)
-        if self.norm:
-            output = self.norm(output)
-
-        return output
 
 
 class TransformerModel(nn.Module):
