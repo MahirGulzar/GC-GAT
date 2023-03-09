@@ -1,7 +1,6 @@
 import copy
 
 from models.encoders.encoder import PredictionEncoder
-from .multi_attention_forward import multi_head_attention_forward
 
 from positional_encodings.torch_encodings import PositionalEncodingPermute1D, PositionalEncoding1D, PositionalEncoding2D, Summer
 
@@ -194,8 +193,8 @@ class STEncoder(PredictionEncoder):
         # Encode target agent
 
         target_agent_feats = inputs['target_agent_representation']
-        target_agent_pos_enc  = PositionalEncoding1D(self.args['target_agent_feat_size'])
-        target_agent_feats = target_agent_pos_enc(target_agent_feats)
+        target_agent_pos_enc  = PositionalEncodingPermute1D(self.args['history_size'])
+        target_agent_feats = target_agent_pos_enc(target_agent_feats) + target_agent_feats
         target_agent_emb = self.dropout_in(self.leaky_relu(self.target_agent_emb(target_agent_feats)))
 
         
@@ -370,9 +369,10 @@ class STEncoder(PredictionEncoder):
         feat_embedding_batched = torch.masked_select(feat_embedding, masks_for_batching)
         feat_embedding_batched = feat_embedding_batched.view(-1, feat_embedding.shape[2], feat_embedding.shape[3])
 
-
-        nbr_pos_enc = PositionalEncoding1D(self.args['nbr_emb_size'])
-        feat_embedding_batched = nbr_pos_enc(feat_embedding_batched)
+        # print("feat_embedding_batched.shape -->", feat_embedding_batched.shape)
+        nbr_pos_enc = PositionalEncodingPermute1D(self.args['nbr_emb_size'])
+        feat_embedding_batched = nbr_pos_enc(feat_embedding_batched) + feat_embedding_batched
+        # print("feat_embedding_batched.shape -->", feat_embedding_batched.shape)
 
         # Encode
         encoding_batched = transform_encoder(feat_embedding_batched)

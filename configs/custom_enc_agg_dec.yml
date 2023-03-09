@@ -25,13 +25,14 @@ test_set_args:
   random_flips: False
 
 batch_size: 32
-num_workers: 8
+num_workers: 4
 
 
 # Encoder parameters
 encoder_type: 'st_encoder'
 # encoder_type: 'pgp_encoder'
 encoder_args:
+  history_size: 5
   target_agent_feat_size: 5
   target_agent_emb_size: 16
   target_agent_enc_size: 32
