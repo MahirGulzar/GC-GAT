@@ -50,95 +50,32 @@ class STEncoder(PredictionEncoder):
 
         self.args = args
 
-        # Target agent embeddings
-        self.target_agent_emb = nn.Linear(args['target_agent_feat_size'], args['target_agent_emb_size'])
-        self.target_agent_temporal_encoder_layer = TransformerEncoderLayer(d_model=args['target_agent_emb_size'], nhead=8)
+        dropout = 0.2
+
+        # Target agent encoding
+        self.target_agent_temporal_encoder_layer = TransformerEncoderLayer(d_model=args['target_agent_feat_size'] * 2, nhead=5)
         self.target_agent_temporal_encoder = TransformerEncoder(self.target_agent_temporal_encoder_layer, 2)
-        self.dropout_target = nn.Dropout(0.2)
-        self.target_agent_emb_enc = nn.Linear(args['target_agent_emb_size'], args['target_agent_enc_size'])
-
-        # self.target_agent_emb_enc = nn.Linear(args['target_agent_emb_size'], args['target_agent_enc_size'])
-
-        # self.target_agent_enc = nn.GRU(args['target_agent_emb_size'], args['target_agent_enc_size'], batch_first=True)
-
-        # Surrounding agent embeddings
-        self.nbr_emb = nn.Linear(args['nbr_feat_size'] + 1, args['nbr_emb_size'])
-        self.nbr_agent_temporal_encoder_layer = TransformerEncoderLayer(d_model=args['nbr_emb_size'], nhead=8)
-        self.nbr_agent_temporal_encoder = TransformerEncoder(self.nbr_agent_temporal_encoder_layer, 2)
-        self.dropout_nbr = nn.Dropout(0.2)
-        self.nbr_emb_enc = nn.Linear(args['nbr_emb_size'], args['nbr_enc_size'])
-        # self.nbr_emb_enc = nn.Linear(args['nbr_emb_size'], args['nbr_enc_size'])
-        # self.nbr_enc = nn.GRU(args['nbr_emb_size'], args['nbr_enc_size'], batch_first=True)
-
-
-        # Independent Temporal Encoders
-        # self.target_agent_temporal_encoder = TransformerEncoder(self.target_agent_temporal_encoder_layer, 1)
-        # self.nbr_agent_temporal_encoder = TransformerEncoder(self.nbr_agent_temporal_encoder_layer, 1)
-
+        self.dropout_target = nn.Dropout(dropout)
+        self.target_agent_emb_enc = nn.Linear(args['target_agent_feat_size'] * 2, args['target_agent_enc_size'])
 
         self.target_agent_conv1d = nn.Conv1d(args['target_agent_feat_size'], args['target_agent_enc_size'], args['target_agent_enc_size'])
 
-
-        nhid = 2048  # the dimension of the feedforward network model in TransformerEncoder
-        nlayers = 2  # the number of nn.TransformerEncoderLayer in nn.TransformerEncoder
-        nhead = 8  # the number of heads in the multihead-attention models
-        dropout = 0.1  # the dropout value
-
-        # Independent Spatial Encoders
-        # TODO: Replace these with TransformModel that uses masks
-
-        # target_agent_spatial_layers = TransformerEncoderLayer(args['target_agent_enc_size'], nhead, nhid, dropout)
-        # nbr_agent_spatial_layers = TransformerEncoderLayer(args['nbr_enc_size'], nhead, nhid, dropout)
-
-        # self.target_agent_spatial_encoder = TransformerEncoder(target_agent_spatial_layers, nlayers)
-        # self.nbr_agent_spatial_encoder = TransformerEncoder(nbr_agent_spatial_layers, nlayers)
-
-
-
-        # self.target_agent_fusion = nn.Linear(args['target_agent_enc_size'] * 2, 32)
-        # self.nbr_agent_fusion = nn.Linear(args['nbr_enc_size'] * 2, 32)
-        # self.agent_nbr_fusion = nn.Linear(args['target_agent_enc_size'] + args['nbr_enc_size'], 32)
-
-
-
-        # Fused encoder
-
-        # self.post_temporal_encoder_layer = TransformerEncoderLayer(d_model=32, nhead=8)
-
-        # self.post_temporal_encoder = TransformerEncoder(self.post_temporal_encoder_layer, 1)
-        # self.post_spatial_encoder = TransformerModel(32, nhead=nhead, nhid=nhid, nlayers=nlayers, dropout=dropout)
-
+        # Surrounding agent encoding
+        self.nbr_emb = nn.Linear(args['nbr_feat_size'] + 1, args['nbr_emb_size'])
+        self.nbr_agent_temporal_encoder_layer = TransformerEncoderLayer(d_model=(args['nbr_feat_size'] + 1) * 2, nhead=6)
+        self.nbr_agent_temporal_encoder = TransformerEncoder(self.nbr_agent_temporal_encoder_layer, 2)
+        self.dropout_nbr = nn.Dropout(dropout)
+        self.nbr_emb_enc = nn.Linear((args['nbr_feat_size'] + 1) * 2, args['nbr_enc_size'])
 
         # ReLU and dropout init
         self.relu = nn.ReLU()
-        self.dropout_in = nn.Dropout(dropout)
-        self.dropout_in2 = nn.Dropout(dropout)
 
-        # -------------------------------------------------------------------------------------------
-
-        # set parameters for network architecture
-        # self.embedding_size = [32]
-        # self.output_size = 2
-        # self.dropout_prob = dropout_prob
-        # self.args = args
-
-        # self.temporal_encoder_layer = TransformerEncoderLayer(d_model=32, nhead=8)
-
-        # emsize = 32  # embedding dimension
-        # nhid = 2048  # the dimension of the feedforward network model in TransformerEncoder
-        # nlayers = 2  # the number of nn.TransformerEncoderLayer in nn.TransformerEncoder
-        # nhead = 8  # the number of heads in the multihead-attention models
-        # dropout = 0.1  # the dropout value
-
-        # self.spatial_encoder_1 = TransformerModel(emsize, nhead, nhid, nlayers, dropout)
-        # self.spatial_encoder_2 = TransformerModel(emsize, nhead, nhid, nlayers, dropout)
-
-        # self.temporal_encoder_1 = TransformerEncoder(self.temporal_encoder_layer, 1)
-        # self.temporal_encoder_2 = TransformerEncoder(self.temporal_encoder_layer, 1)
-
-
-        # ----------------------------------------------------------------------------------------------
-
+        # nbr-nbr attention
+        self.nbr_query_emb = nn.Linear(args['nbr_enc_size'], args['nbr_enc_size'])
+        self.nbr_key_emb = nn.Linear(32, args['nbr_enc_size'])
+        self.nbr_val_emb = nn.Linear(32, args['nbr_enc_size'])
+        self.n_n_att = nn.MultiheadAttention(args['nbr_enc_size'], num_heads=1)
+        # self.nbr_mix = nn.Linear(args['nbr_enc_size']*2, args['nbr_enc_size'])
 
         # Node encoders
         self.node_emb = nn.Linear(args['node_feat_size'], args['node_emb_size'])
@@ -190,64 +127,61 @@ class STEncoder(PredictionEncoder):
         :return:
         """
 
+        #---------------------------------------------------------------------------------------
         # Encode target agent
-
+        
         target_agent_feats = inputs['target_agent_representation']
         target_agent_pos_enc  = PositionalEncodingPermute1D(self.args['history_size'])
-        target_agent_feats = target_agent_pos_enc(target_agent_feats) + target_agent_feats
-        target_agent_emb = self.dropout_in(self.leaky_relu(self.target_agent_emb(target_agent_feats)))
+        # target_agent_feats = target_agent_pos_enc(target_agent_feats) + target_agent_feats
+        target_agent_feats = torch.cat((target_agent_pos_enc(target_agent_feats), target_agent_feats), -1)
 
-        
-        # target_agent_emb = target_agent_pos_enc(target_agent_emb)
-        target_agent_temporal_enc = self.target_agent_temporal_encoder(self.leaky_relu(target_agent_emb))
+        target_agent_temporal_enc = self.target_agent_temporal_encoder(self.leaky_relu(target_agent_feats))
         target_agent_enc = self.dropout_target(self.leaky_relu(self.target_agent_emb_enc(target_agent_temporal_enc)))
         target_agent_enc = self.target_agent_conv1d(target_agent_enc)
         target_agent_enc = target_agent_enc.permute(2, 0, 1)
         target_agent_enc = target_agent_enc.squeeze(0)
 
-
+        #---------------------------------------------------------------------------------------
         # Encode surrounding agents
         
         nbr_vehicle_feats = inputs['surrounding_agent_representation']['vehicles']
         nbr_vehicle_feats = torch.cat((nbr_vehicle_feats, torch.zeros_like(nbr_vehicle_feats[:, :, :, 0:1])), dim=-1)
         nbr_vehicle_masks = inputs['surrounding_agent_representation']['vehicle_masks']
-
-        nbr_vehicle_emb = self.dropout_in2(self.leaky_relu(self.nbr_emb(nbr_vehicle_feats)))
-        # print("nbr_vehicle_emb.shape --> ", nbr_vehicle_emb.shape)
-        nbr_vehicle_enc = self.variable_size_transform_encode(nbr_vehicle_emb, nbr_vehicle_masks, self.nbr_agent_temporal_encoder)
-        # print("nbr_vehicle_enc.shape --> ", nbr_vehicle_enc.shape)
-        # nbr_vehicle_enc = self.dropout_nbr(self.leaky_relu(nbr_vehicle_enc))
+        nbr_vehicle_enc = self.variable_size_transform_encode(nbr_vehicle_feats, nbr_vehicle_masks, self.nbr_agent_temporal_encoder)
         nbr_vehicle_enc = self.dropout_nbr(self.leaky_relu(self.nbr_emb_enc(nbr_vehicle_enc)))
-        # print("nbr_vehicle_enc.shape --> ", nbr_vehicle_enc.shape)
-        # nbr_vehicle_enc = nbr_temporal_vehicle_enc
 
 
         nbr_ped_feats = inputs['surrounding_agent_representation']['pedestrians']
         nbr_ped_feats = torch.cat((nbr_ped_feats, torch.ones_like(nbr_ped_feats[:, :, :, 0:1])), dim=-1)
         nbr_ped_masks = inputs['surrounding_agent_representation']['pedestrian_masks']
 
-        nbr_pedestrian_emb = self.dropout_in2(self.leaky_relu(self.nbr_emb(nbr_ped_feats)))
-        # nbr_pedestrian_emb_pos_enc = PositionalEncoding2D(self.args['nbr_enc_size'])
-        # nbr_pedestrian_emb = nbr_pedestrian_emb_pos_enc(nbr_pedestrian_emb)
-        # print("nbr_pedestrian_emb.shape --> ", nbr_pedestrian_emb.shape)
-        nbr_pedestrian_enc = self.variable_size_transform_encode(nbr_pedestrian_emb, nbr_ped_masks, self.nbr_agent_temporal_encoder)
-        # print("nbr_pedestrian_enc.shape --> ", nbr_pedestrian_enc.shape)
-        # nbr_pedestrian_enc = self.dropout_nbr(self.leaky_relu(nbr_pedestrian_enc))
+
+        nbr_pedestrian_enc = self.variable_size_transform_encode(nbr_ped_feats, nbr_ped_masks, self.nbr_agent_temporal_encoder)
         nbr_pedestrian_enc = self.dropout_nbr(self.leaky_relu(self.nbr_emb_enc(nbr_pedestrian_enc)))
-        # print("nbr_pedestrian_enc.shape --> ", nbr_pedestrian_enc.shape)
 
 
-        
         #---------------------------------------------------------------------------------------
-        # Encode target agent
         # Encode lane nodes
         lane_node_feats = inputs['map_representation']['lane_node_feats']
         lane_node_masks = inputs['map_representation']['lane_node_masks']
         lane_node_embedding = self.leaky_relu(self.node_emb(lane_node_feats))
         lane_node_enc = self.variable_size_gru_encode(lane_node_embedding, lane_node_masks, self.node_encoder)
 
-        # Agent-node attention
         nbr_encodings = torch.cat((nbr_vehicle_enc, nbr_pedestrian_enc), dim=1)
+        #---------------------------------------------------------------------------------------
+        # nbr-nbr attention
+        
+        # queries = self.nbr_query_emb(nbr_encodings).permute(1, 0, 2)
+        # keys = self.nbr_key_emb(nbr_encodings).permute(1, 0, 2)
+        # vals = self.nbr_val_emb(nbr_encodings).permute(1, 0, 2)
+
+        # n_n_att_op, _ = self.n_n_att(queries, keys, vals)
+        # n_n_att_op = n_n_att_op.permute(1, 0, 2)
+
+        #---------------------------------------------------------------------------------------
+
+        # Agent-node attention
+        
         queries = self.query_emb(lane_node_enc).permute(1, 0, 2)
         keys = self.key_emb(nbr_encodings).permute(1, 0, 2)
         vals = self.val_emb(nbr_encodings).permute(1, 0, 2)
@@ -370,12 +304,13 @@ class STEncoder(PredictionEncoder):
         feat_embedding_batched = feat_embedding_batched.view(-1, feat_embedding.shape[2], feat_embedding.shape[3])
 
         # print("feat_embedding_batched.shape -->", feat_embedding_batched.shape)
-        nbr_pos_enc = PositionalEncodingPermute1D(self.args['nbr_emb_size'])
-        feat_embedding_batched = nbr_pos_enc(feat_embedding_batched) + feat_embedding_batched
+        nbr_pos_enc = PositionalEncodingPermute1D(self.args['nbr_feat_size'])
+        feat_embedding_batched = torch.cat((nbr_pos_enc(feat_embedding_batched), feat_embedding_batched), -1)
+        # feat_embedding_batched = nbr_pos_enc(feat_embedding_batched) + feat_embedding_batched
         # print("feat_embedding_batched.shape -->", feat_embedding_batched.shape)
 
         # Encode
-        encoding_batched = transform_encoder(feat_embedding_batched)
+        encoding_batched = transform_encoder(self.leaky_relu(feat_embedding_batched))
         encoding_batched = encoding_batched.squeeze(0)
 
         # Scatter back to appropriate batch index
