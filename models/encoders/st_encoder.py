@@ -81,12 +81,27 @@ class STEncoder(PredictionEncoder):
         self.node_emb = nn.Linear(args['node_feat_size'], args['node_emb_size'])
         self.node_encoder = nn.GRU(args['node_emb_size'], args['node_enc_size'], batch_first=True)
 
-        # Agent-node attention
+        # # Agent-node attention
+        # self.query_emb = nn.Linear(args['node_enc_size'], args['node_enc_size'])
+        # self.key_emb = nn.Linear(32, args['node_enc_size'])
+        # self.val_emb = nn.Linear(32, args['node_enc_size'])
+        # self.a_n_att = nn.MultiheadAttention(args['node_enc_size'], num_heads=1)
+        # self.mix = nn.Linear(args['node_enc_size']*2, args['node_enc_size'])
+
+        # Agent-node attention ( actually surrounding agent attention with lane nodes )
         self.query_emb = nn.Linear(args['node_enc_size'], args['node_enc_size'])
-        self.key_emb = nn.Linear(32, args['node_enc_size'])
-        self.val_emb = nn.Linear(32, args['node_enc_size'])
+        self.key_emb = nn.Linear(args['nbr_enc_size'], args['node_enc_size'])
+        self.val_emb = nn.Linear(args['nbr_enc_size'], args['node_enc_size'])
         self.a_n_att = nn.MultiheadAttention(args['node_enc_size'], num_heads=1)
         self.mix = nn.Linear(args['node_enc_size']*2, args['node_enc_size'])
+
+        # Target agent attention
+        self.target_query_emb = nn.Linear(args['node_enc_size'], args['node_enc_size'])
+        self.target_key_emb = nn.Linear(args['target_agent_enc_size'], args['node_enc_size'])
+        self.target_val_emb = nn.Linear(args['target_agent_enc_size'], args['node_enc_size'])
+        self.t_n_att = nn.MultiheadAttention(args['node_enc_size'], num_heads=1)
+        self.target_mix = nn.Linear(args['node_enc_size']*2, args['node_enc_size'])
+
 
         # Non-linearities
         self.leaky_relu = nn.LeakyReLU()
@@ -137,6 +152,8 @@ class STEncoder(PredictionEncoder):
 
         target_agent_temporal_enc = self.target_agent_temporal_encoder(self.leaky_relu(target_agent_feats))
         target_agent_enc = self.dropout_target(self.leaky_relu(self.target_agent_emb_enc(target_agent_temporal_enc)))
+
+
         target_agent_enc = self.target_agent_conv1d(target_agent_enc)
         target_agent_enc = target_agent_enc.permute(2, 0, 1)
         target_agent_enc = target_agent_enc.squeeze(0)
@@ -178,6 +195,25 @@ class STEncoder(PredictionEncoder):
         # n_n_att_op, _ = self.n_n_att(queries, keys, vals)
         # n_n_att_op = n_n_att_op.permute(1, 0, 2)
 
+
+        #---------------------------------------------------------------------------------------
+
+        # Target agent attention
+        # print("lane_node_enc.shape --> ", lane_node_enc.shape)
+        # print("nbr_encodings.shape --> ", nbr_encodings.shape)
+        # print("target_agent_enc.shape --> ", target_agent_enc.shape)
+        
+
+        lane_node_queries = self.target_query_emb(lane_node_enc).permute(1, 0, 2)
+        target_agent_node_keys = self.target_key_emb(target_agent_enc.unsqueeze(1)).permute(1, 0, 2)
+        target_agent_node_vals = self.target_val_emb(target_agent_enc.unsqueeze(1)).permute(1, 0, 2)
+        t_n_att_op, _ = self.t_n_att(lane_node_queries, target_agent_node_keys, target_agent_node_vals)
+        t_n_att_op = t_n_att_op.permute(1, 0, 2)
+
+        # print("t_n_att_op.shape --> ", t_n_att_op.shape)
+
+        lane_target_enc = self.leaky_relu(self.target_mix(torch.cat((lane_node_enc, t_n_att_op), dim=2)))
+
         #---------------------------------------------------------------------------------------
 
         # Agent-node attention
@@ -190,8 +226,19 @@ class STEncoder(PredictionEncoder):
         att_op, _ = self.a_n_att(queries, keys, vals, attn_mask=attn_masks)
         att_op = att_op.permute(1, 0, 2)
 
+        # print("att_op.shape --> ", att_op.shape)
+
         # Concatenate with original node encodings and 1x1 conv
         lane_node_enc = self.leaky_relu(self.mix(torch.cat((lane_node_enc, att_op), dim=2)))
+
+        lane_node_enc = lane_node_enc + lane_target_enc
+
+        # print("lane_node_enc.shape --> ", lane_node_enc.shape)
+
+        # print("after new attention lane_node_enc.shape --> ", lane_node_enc.shape)
+
+        # print("--------------------------")
+
 
         # GAT layers
         adj_mat = self.build_adj_mat(inputs['map_representation']['s_next'], inputs['map_representation']['edge_type'])
@@ -421,192 +468,3 @@ class TransformerModel(nn.Module):
 
         return output
 
-
-# class STAR(torch.nn.Module):
-
-#     def __init__(self, args, dropout_prob=0):
-#         super(STAR, self).__init__()
-
-#         # set parameters for network architecture
-#         self.embedding_size = [32]
-#         self.output_size = 2
-#         self.dropout_prob = dropout_prob
-#         self.args = args
-
-#         self.temporal_encoder_layer = TransformerEncoderLayer(d_model=32, nhead=8)
-
-#         emsize = 32  # embedding dimension
-#         nhid = 2048  # the dimension of the feedforward network model in TransformerEncoder
-#         nlayers = 2  # the number of nn.TransformerEncoderLayer in nn.TransformerEncoder
-#         nhead = 8  # the number of heads in the multihead-attention models
-#         dropout = 0.1  # the dropout value
-
-#         self.spatial_encoder_1 = TransformerModel(emsize, nhead, nhid, nlayers, dropout)
-#         self.spatial_encoder_2 = TransformerModel(emsize, nhead, nhid, nlayers, dropout)
-
-#         self.temporal_encoder_1 = TransformerEncoder(self.temporal_encoder_layer, 1)
-#         self.temporal_encoder_2 = TransformerEncoder(self.temporal_encoder_layer, 1)
-
-#         # Linear layer to map input to embedding
-#         self.input_embedding_layer_temporal = nn.Linear(2, 32)
-#         self.input_embedding_layer_spatial = nn.Linear(2, 32)
-
-#         # Linear layer to output and fusion
-#         self.output_layer = nn.Linear(48, 2)
-#         self.fusion_layer = nn.Linear(64, 32)
-
-#         # ReLU and dropout init
-#         self.relu = nn.ReLU()
-#         self.dropout_in = nn.Dropout(self.dropout_prob)
-#         self.dropout_in2 = nn.Dropout(self.dropout_prob)
-
-#     def get_st_ed(self, batch_num):
-#         """
-
-#         :param batch_num: contains number of pedestrians in different scenes for a batch
-#         :type batch_num: list
-#         :return: st_ed: list of tuple contains start index and end index of pedestrians in different scenes
-#         :rtype: list
-#         """
-#         cumsum = torch.cumsum(batch_num, dim=0)
-#         st_ed = []
-#         for idx in range(1, cumsum.shape[0]):
-#             st_ed.append((int(cumsum[idx - 1]), int(cumsum[idx])))
-
-#         st_ed.insert(0, (0, int(cumsum[0])))
-
-#         return st_ed
-
-#     def get_node_index(self, seq_list):
-#         """
-
-#         :param seq_list: mask indicates whether pedestrain exists
-#         :type seq_list: numpy array [F, N], F: number of frames. N: Number of pedestrians (a mask to indicate whether
-#                                                                                             the pedestrian exists)
-#         :return: All the pedestrians who exist from the beginning to current frame
-#         :rtype: numpy array
-#         """
-#         for idx, framenum in enumerate(seq_list):
-
-#             if idx == 0:
-#                 node_indices = framenum > 0
-#             else:
-#                 node_indices *= (framenum > 0)
-
-#         return node_indices
-
-#     def update_batch_pednum(self, batch_pednum, ped_list):
-#         """
-
-#         :param batch_pednum: batch_num: contains number of pedestrians in different scenes for a batch
-#         :type list
-#         :param ped_list: mask indicates whether the pedestrian exists through the time window to current frame
-#         :type tensor
-#         :return: batch_pednum: contains number of pedestrians in different scenes for a batch after removing pedestrian who disappeared
-#         :rtype: list
-#         """
-#         updated_batch_pednum_ = copy.deepcopy(batch_pednum).cpu().numpy()
-#         updated_batch_pednum = copy.deepcopy(batch_pednum)
-
-#         cumsum = np.cumsum(updated_batch_pednum_)
-#         new_ped = copy.deepcopy(ped_list).cpu().numpy()
-
-#         for idx, num in enumerate(cumsum):
-#             num = int(num)
-#             if idx == 0:
-#                 updated_batch_pednum[idx] = len(np.where(new_ped[0:num] == 1)[0])
-#             else:
-#                 updated_batch_pednum[idx] = len(np.where(new_ped[int(cumsum[idx - 1]):num] == 1)[0])
-
-#         return updated_batch_pednum
-
-#     def mean_normalize_abs_input(self, node_abs, st_ed):
-#         """
-
-#         :param node_abs: Absolute coordinates of pedestrians
-#         :type Tensor
-#         :param st_ed: list of tuple indicates the indices of pedestrians belonging to the same scene
-#         :type List of tupule
-#         :return: node_abs: Normalized absolute coordinates of pedestrians
-#         :rtype: Tensor
-#         """
-#         node_abs = node_abs.permute(1, 0, 2)
-#         for st, ed in st_ed:
-#             mean_x = torch.mean(node_abs[st:ed, :, 0])
-#             mean_y = torch.mean(node_abs[st:ed, :, 1])
-
-#             node_abs[st:ed, :, 0] = (node_abs[st:ed, :, 0] - mean_x)
-#             node_abs[st:ed, :, 1] = (node_abs[st:ed, :, 1] - mean_y)
-
-#         return node_abs.permute(1, 0, 2)
-
-#     def forward(self, inputs, iftest=False):
-
-#         nodes_abs, nodes_norm, shift_value, seq_list, nei_lists, nei_num, batch_pednum = inputs
-#         num_Ped = nodes_norm.shape[1]
-
-#         outputs = torch.zeros(nodes_norm.shape[0], num_Ped, 2).cuda()
-#         GM = torch.zeros(nodes_norm.shape[0], num_Ped, 32).cuda()
-
-#         noise = get_noise((1, 16), 'gaussian')
-
-#         for framenum in range(self.args.seq_length - 1):
-
-#             if framenum >= self.args.obs_length and iftest:
-
-#                 node_index = self.get_node_index(seq_list[:self.args.obs_length])
-#                 updated_batch_pednum = self.update_batch_pednum(batch_pednum, node_index)
-#                 st_ed = self.get_st_ed(updated_batch_pednum)
-
-#                 nodes_current = outputs[self.args.obs_length - 1:framenum, node_index]
-#                 nodes_current = torch.cat((nodes_norm[:self.args.obs_length, node_index], nodes_current))
-#                 node_abs_base = nodes_abs[:self.args.obs_length, node_index]
-#                 node_abs_pred = shift_value[self.args.obs_length:framenum + 1, node_index] + outputs[
-#                                                                                            self.args.obs_length - 1:framenum,
-#                                                                                            node_index]
-#                 node_abs = torch.cat((node_abs_base, node_abs_pred), dim=0)
-#                 # We normalize the absolute coordinates using the mean value in the same scene
-#                 node_abs = self.mean_normalize_abs_input(node_abs, st_ed)
-
-#             else:
-#                 node_index = self.get_node_index(seq_list[:framenum + 1])
-#                 nei_list = nei_lists[framenum, node_index, :]
-#                 nei_list = nei_list[:, node_index]
-#                 updated_batch_pednum = self.update_batch_pednum(batch_pednum, node_index)
-#                 st_ed = self.get_st_ed(updated_batch_pednum)
-#                 nodes_current = nodes_norm[:framenum + 1, node_index]
-#                 # We normalize the absolute coordinates using the mean value in the same scene
-#                 node_abs = self.mean_normalize_abs_input(nodes_abs[:framenum + 1, node_index], st_ed)
-
-#             # Input Embedding
-#             if framenum == 0:
-#                 temporal_input_embedded = self.dropout_in(self.relu(self.input_embedding_layer_temporal(nodes_current)))
-#             else:
-#                 temporal_input_embedded = self.dropout_in(self.relu(self.input_embedding_layer_temporal(nodes_current)))
-#                 temporal_input_embedded[:framenum] = GM[:framenum, node_index]
-
-#             spatial_input_embedded_ = self.dropout_in2(self.relu(self.input_embedding_layer_spatial(node_abs)))
-
-#             spatial_input_embedded = self.spatial_encoder_1(spatial_input_embedded_[-1].unsqueeze(1), nei_list)
-
-#             spatial_input_embedded = spatial_input_embedded.permute(1, 0, 2)[-1]
-#             temporal_input_embedded_last = self.temporal_encoder_1(temporal_input_embedded)[-1]
-
-#             temporal_input_embedded = temporal_input_embedded[:-1]
-
-#             fusion_feat = torch.cat((temporal_input_embedded_last, spatial_input_embedded), dim=1)
-#             fusion_feat = self.fusion_layer(fusion_feat)
-
-#             spatial_input_embedded = self.spatial_encoder_2(fusion_feat.unsqueeze(1), nei_list)
-#             spatial_input_embedded = spatial_input_embedded.permute(1, 0, 2)
-
-#             temporal_input_embedded = torch.cat((temporal_input_embedded, spatial_input_embedded), dim=0)
-#             temporal_input_embedded = self.temporal_encoder_2(temporal_input_embedded)[-1]
-
-#             noise_to_cat = noise.repeat(temporal_input_embedded.shape[0], 1)
-#             temporal_input_embedded_wnoise = torch.cat((temporal_input_embedded, noise_to_cat), dim=1)
-#             outputs_current = self.output_layer(temporal_input_embedded_wnoise)
-#             outputs[framenum, node_index] = outputs_current
-#             GM[framenum, node_index] = temporal_input_embedded
-
-#         return outputs

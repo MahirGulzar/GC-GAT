@@ -63,7 +63,7 @@ class Visualizer:
         for n, indices in enumerate(index_list):
             imgs = self.generate_nuscenes_gif(indices)
             filename = os.path.join(output_dir, 'results', 'gifs', 'example' + str(n) + '.gif')
-            imageio.mimsave(filename, imgs, format='GIF', fps=2)
+            imageio.mimsave(filename, imgs, format='GIF', duration=50)
 
     def get_vis_idcs_nuscenes(self):
         """
