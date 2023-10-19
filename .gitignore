@@ -4,7 +4,7 @@ __pycache__/
 
 preprocessed/
 PGP_lr-scheduler/
-output/
+output*/
 datasets/nuScenes/maps
 datasets/nuScenes/samples
 datasets/nuScenes/sweeps
