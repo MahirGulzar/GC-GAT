@@ -55,32 +55,33 @@ class Evaluator:
         Main function to evaluate trained model
         :param output_dir: Output directory to store results
         """
+        print(output_dir)
+        self.generate_nuscenes_benchmark_submission(output_dir)
+        # # Initialize aggregate metrics
+        # agg_metrics = self.initialize_aggregate_metrics()
 
-        # Initialize aggregate metrics
-        agg_metrics = self.initialize_aggregate_metrics()
+        # with torch.no_grad():
+        #     for i, data in enumerate(self.dl):
 
-        with torch.no_grad():
-            for i, data in enumerate(self.dl):
+        #         # Load data
+        #         data = u.send_to_device(u.convert_double_to_float(data))
 
-                # Load data
-                data = u.send_to_device(u.convert_double_to_float(data))
+        #         # Forward pass
+        #         predictions = self.model(data['inputs'])
 
-                # Forward pass
-                predictions = self.model(data['inputs'])
+        #         # Aggregate metrics
+        #         agg_metrics = self.aggregate_metrics(agg_metrics, predictions, data['ground_truth'])
 
-                # Aggregate metrics
-                agg_metrics = self.aggregate_metrics(agg_metrics, predictions, data['ground_truth'])
+        #         self.print_progress(i)
 
-                self.print_progress(i)
-
-        # compute and print average metrics
-        self.print_progress(len(self.dl))
-        with open(os.path.join(output_dir, 'results', "results.txt"), "w") as out_file:
-            for metric in self.metrics:
-                avg_metric = agg_metrics[metric.name]/agg_metrics['sample_count']
-                output = metric.name + ': ' + format(avg_metric, '0.2f')
-                print(output)
-                out_file.write(output + '\n')
+        # # compute and print average metrics
+        # self.print_progress(len(self.dl))
+        # with open(os.path.join(output_dir, 'results', "results.txt"), "w") as out_file:
+        #     for metric in self.metrics:
+        #         avg_metric = agg_metrics[metric.name]/agg_metrics['sample_count']
+        #         output = metric.name + ': ' + format(avg_metric, '0.2f')
+        #         print(output)
+        #         out_file.write(output + '\n')
 
     def initialize_aggregate_metrics(self):
         """

@@ -138,23 +138,23 @@ class STEncoder(PredictionEncoder):
         #---------------------------------------------------------------------------------------
         # Encode surrounding agents
         
-        nbr_vehicle_feats = inputs['surrounding_agent_representation']['vehicles']
-        nbr_vehicle_feats = torch.cat((nbr_vehicle_feats, torch.zeros_like(nbr_vehicle_feats[:, :, :, 0:1])), dim=-1)
-        nbr_vehicle_masks = inputs['surrounding_agent_representation']['vehicle_masks']
-        nbr_vehicle_enc = self.variable_size_transform_encode_preserve(nbr_vehicle_feats, nbr_vehicle_masks, self.nbr_agent_temporal_encoder)
-        nbr_vehicle_enc = self.dropout_nbr(self.leaky_relu(self.nbr_emb_enc(nbr_vehicle_enc)))
+        # nbr_vehicle_feats = inputs['surrounding_agent_representation']['vehicles']
+        # nbr_vehicle_feats = torch.cat((nbr_vehicle_feats, torch.zeros_like(nbr_vehicle_feats[:, :, :, 0:1])), dim=-1)
+        # nbr_vehicle_masks = inputs['surrounding_agent_representation']['vehicle_masks']
+        # nbr_vehicle_enc = self.variable_size_transform_encode_preserve(nbr_vehicle_feats, nbr_vehicle_masks, self.nbr_agent_temporal_encoder)
+        # nbr_vehicle_enc = self.dropout_nbr(self.leaky_relu(self.nbr_emb_enc(nbr_vehicle_enc)))
 
 
-        nbr_ped_feats = inputs['surrounding_agent_representation']['pedestrians']
-        nbr_ped_feats = torch.cat((nbr_ped_feats, torch.ones_like(nbr_ped_feats[:, :, :, 0:1])), dim=-1)
-        nbr_ped_masks = inputs['surrounding_agent_representation']['pedestrian_masks']
-        nbr_pedestrian_enc = self.variable_size_transform_encode_preserve(nbr_ped_feats, nbr_ped_masks, self.nbr_agent_temporal_encoder)
-        nbr_pedestrian_enc = self.dropout_nbr(self.leaky_relu(self.nbr_emb_enc(nbr_pedestrian_enc)))
+        # nbr_ped_feats = inputs['surrounding_agent_representation']['pedestrians']
+        # nbr_ped_feats = torch.cat((nbr_ped_feats, torch.ones_like(nbr_ped_feats[:, :, :, 0:1])), dim=-1)
+        # nbr_ped_masks = inputs['surrounding_agent_representation']['pedestrian_masks']
+        # nbr_pedestrian_enc = self.variable_size_transform_encode_preserve(nbr_ped_feats, nbr_ped_masks, self.nbr_agent_temporal_encoder)
+        # nbr_pedestrian_enc = self.dropout_nbr(self.leaky_relu(self.nbr_emb_enc(nbr_pedestrian_enc)))
 
-        nbr_vehicle_enc = self.variable_size_lstm_encode(nbr_vehicle_enc, nbr_vehicle_masks, self.nbr_agent_seq_encoder)
-        nbr_ped_enc = self.variable_size_lstm_encode(nbr_pedestrian_enc, nbr_ped_masks, self.nbr_agent_seq_encoder)
-        # Agent-node attention
-        nbr_encodings = torch.cat((nbr_vehicle_enc, nbr_ped_enc), dim=1)
+        # nbr_vehicle_enc = self.variable_size_lstm_encode(nbr_vehicle_enc, nbr_vehicle_masks, self.nbr_agent_seq_encoder)
+        # nbr_ped_enc = self.variable_size_lstm_encode(nbr_pedestrian_enc, nbr_ped_masks, self.nbr_agent_seq_encoder)
+        # # Agent-node attention
+        # nbr_encodings = torch.cat((nbr_vehicle_enc, nbr_ped_enc), dim=1)
 
 
         #---------------------------------------------------------------------------------------
@@ -164,9 +164,9 @@ class STEncoder(PredictionEncoder):
         lane_node_embedding = self.leaky_relu(self.node_emb(lane_node_feats))
         lane_node_enc = self.variable_size_gru_encode(lane_node_embedding, lane_node_masks, self.node_encoder)
 
-        nbr_encodings = torch.cat((nbr_vehicle_enc, nbr_ped_enc), dim=1)
+        # nbr_encodings = torch.cat((nbr_vehicle_enc, nbr_ped_enc), dim=1)
 
-        #---------------------------------------------------------------------------------------
+        # #---------------------------------------------------------------------------------------
 
         lane_node_queries = self.target_query_emb(lane_node_enc).permute(1, 0, 2)
         target_agent_node_keys = self.target_key_emb(target_agent_enc.unsqueeze(1)).permute(1, 0, 2)
@@ -180,16 +180,17 @@ class STEncoder(PredictionEncoder):
 
         # Agent-node attention
         
-        queries = self.query_emb(lane_node_enc).permute(1, 0, 2)
-        keys = self.key_emb(nbr_encodings).permute(1, 0, 2)
-        vals = self.val_emb(nbr_encodings).permute(1, 0, 2)
-        attn_masks = torch.cat((inputs['agent_node_masks']['vehicles'],
-                                inputs['agent_node_masks']['pedestrians']), dim=2)
-        att_op, _ = self.a_n_att(queries, keys, vals, attn_mask=attn_masks)
-        att_op = att_op.permute(1, 0, 2)
+        # queries = self.query_emb(lane_node_enc).permute(1, 0, 2)
+        # keys = self.key_emb(nbr_encodings).permute(1, 0, 2)
+        # vals = self.val_emb(nbr_encodings).permute(1, 0, 2)
+        # attn_masks = torch.cat((inputs['agent_node_masks']['vehicles'],
+        #                         inputs['agent_node_masks']['pedestrians']), dim=2)
+        # att_op, _ = self.a_n_att(queries, keys, vals, attn_mask=attn_masks)
+        # att_op = att_op.permute(1, 0, 2)
 
-        lane_node_enc = self.leaky_relu(self.mix(torch.cat((lane_node_enc, att_op), dim=2)))
-        lane_node_enc = lane_node_enc + lane_target_enc
+        # lane_node_enc = self.leaky_relu(self.mix(torch.cat((lane_node_enc, att_op), dim=2)))
+        
+        lane_node_enc = lane_target_enc
 
         # GAT layers
         adj_mat = self.build_adj_mat(inputs['map_representation']['s_next'], inputs['map_representation']['edge_type'])

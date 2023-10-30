@@ -12,6 +12,7 @@ from models.encoders.raster_encoder import RasterEncoder
 from models.encoders.polyline_subgraph import PolylineSubgraphs
 from models.encoders.pgp_encoder import PGPEncoder
 from models.encoders.st_encoder import STEncoder
+from models.encoders.pgp_mod_encoder import PGPModEncoder
 from models.aggregators.concat import Concat
 from models.aggregators.global_attention import GlobalAttention
 from models.aggregators.goal_conditioned import GoalConditioned
@@ -20,6 +21,7 @@ from models.decoders.mtp import MTP
 from models.decoders.multipath import Multipath
 from models.decoders.covernet import CoverNet
 from models.decoders.lvm import LVM
+from models.decoders.future import Future
 
 # Import metrics
 from metrics.mtp_loss import MTPLoss
@@ -83,7 +85,8 @@ def initialize_encoder(encoder_type: str, encoder_args: Dict):
         'raster_encoder': RasterEncoder,
         'polyline_subgraphs': PolylineSubgraphs,
         'pgp_encoder': PGPEncoder,
-        'st_encoder': STEncoder
+        'st_encoder': STEncoder,
+        'pgp_mod_encoder': PGPModEncoder
     }
 
     return encoder_mapping[encoder_type](encoder_args)
@@ -116,7 +119,8 @@ def initialize_decoder(decoder_type: str, decoder_args: Dict):
         'mtp': MTP,
         'multipath': Multipath,
         'covernet': CoverNet,
-        'lvm': LVM
+        'lvm': LVM,
+        'future': Future
     }
 
     return decoder_mapping[decoder_type](decoder_args)
