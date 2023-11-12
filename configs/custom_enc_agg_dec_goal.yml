@@ -33,14 +33,14 @@ encoder_type: 'pgp_mod_encoder'
 # encoder_type: 'pgp_encoder'
 encoder_args:
   history_size: 5
-  target_agent_feat_size: 5
+  target_agent_feat_size: 7
   target_agent_emb_size: 16
   target_agent_enc_size: 32
   node_feat_size: 6
   node_emb_size: 16
   node_enc_size: 32
-  nbr_feat_size: 5
-  nbr_emb_size: 16
+  nbr_feat_size: 14
+  nbr_emb_size: 24
   nbr_enc_size: 32
   num_gat_layers: 2
 
@@ -82,7 +82,7 @@ optim_args:
 
 
 losses: ['min_ade_k']
-loss_weights: [1, 0.5]
+loss_weights: [1]
 loss_args:
   - k: 10
   - dummy: 0

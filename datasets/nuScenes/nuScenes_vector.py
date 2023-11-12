@@ -11,6 +11,7 @@ from shapely.geometry.polygon import Polygon
 import os
 import pickle
 import torch
+import json
 
 
 class NuScenesVector(NuScenesTrajectories):
@@ -31,6 +32,13 @@ class NuScenesVector(NuScenesTrajectories):
         # Initialize helper and maps
         self.map_locs = ['singapore-onenorth', 'singapore-hollandvillage', 'singapore-queenstown', 'boston-seaport']
         self.maps = {i: NuScenesMap(map_name=i, dataroot=self.helper.data.dataroot) for i in self.map_locs}
+
+        # Load the JSON data from a file
+        with open('/home/mahir/git_repos/pgp_related_stuff/nuscenes/v1.0-mini/attribute.json', 'r') as json_file:
+            class_data = json.load(json_file)
+
+        # Create a dictionary to map class tokens to their respective index in the JSON data
+        self.class_token_to_index = {item["token"]: index for index, item in enumerate(class_data)}
 
         # Vector map parameters
         self.map_extent = args['map_extent']
@@ -152,42 +160,27 @@ class NuScenesVector(NuScenesTrajectories):
         """
 
         # Get vehicles and pedestrian histories for current sample
-        vehicles, vehicles_future = self.get_agents_of_type(idx, 'vehicle')
-        pedestrians, pedestrians_future = self.get_agents_of_type(idx, 'human')
+        vehicles = self.get_agents_of_type(idx, 'vehicle')
+        pedestrians = self.get_agents_of_type(idx, 'human')
 
         # Discard poses outside map extent
         vehicles = self.discard_poses_outside_extent(vehicles)
         pedestrians = self.discard_poses_outside_extent(pedestrians)
-
-        # Discard poses outside map extent
-        vehicles_future = self.discard_poses_outside_extent(vehicles_future)
-        pedestrians_future = self.discard_poses_outside_extent(pedestrians_future)
 
         # While running the dataset class in 'compute_stats' mode:
         if self.mode == 'compute_stats':
             return len(vehicles), len(pedestrians)
 
         # Convert to fixed size arrays for batching
-        vehicles, vehicle_masks = self.list_to_tensor(vehicles, self.max_vehicles, self.t_h * 2 + 1, 5)
-        pedestrians, pedestrian_masks = self.list_to_tensor(pedestrians, self.max_pedestrians, self.t_h * 2 + 1, 5)
+        vehicles, vehicle_masks = self.list_to_tensor(vehicles, self.max_vehicles, self.t_h * 2 + 1, 14)
+        pedestrians, pedestrian_masks = self.list_to_tensor(pedestrians, self.max_pedestrians, self.t_h * 2 + 1, 14)
 
-
-        vehicles_future, vehicle_future_masks = self.list_to_tensor(vehicles_future, self.max_vehicles, self.t_f * 2 + 1, 5)
-        pedestrians_future, pedestrian_future_masks = self.list_to_tensor(pedestrians_future, self.max_pedestrians, self.t_f * 2 + 1, 5)
-
-        print(vehicles.shape)
-        print(vehicles_future.shape)
-        print("------------------------------------------")
 
         surrounding_agent_representation = {
             'vehicles': vehicles,
-            'vehicles_future': vehicles_future,
             'vehicle_masks': vehicle_masks,
-            'vehicle_future_masks': vehicle_future_masks,
             'pedestrians': pedestrians,
-            'pedestrians_future': pedestrians_future,
             'pedestrian_masks': pedestrian_masks,
-            'pedestrian_future_masks': pedestrian_future_masks
         }
 
         return surrounding_agent_representation
@@ -283,9 +276,6 @@ class NuScenesVector(NuScenesTrajectories):
         # Load all agents for sample
         agent_details = self.helper.get_past_for_sample(s_t, seconds=self.t_h, in_agent_frame=False, just_xy=False)
         agent_hist = self.helper.get_past_for_sample(s_t, seconds=self.t_h, in_agent_frame=False, just_xy=True)
-        
-        agent_future = self.helper.get_future_for_sample(s_t, seconds=self.t_f, in_agent_frame=False, just_xy=True)
-        
 
         # Add present time to agent histories
         present_time = self.helper.get_annotations_for_sample(s_t)
@@ -297,33 +287,17 @@ class NuScenesVector(NuScenesTrajectories):
                     agent_hist[ann_i_t] = np.concatenate((present_pose, agent_hist[ann_i_t]))
                 else:
                     agent_hist[ann_i_t] = present_pose
-        
-        for annotation in present_time:
-            ann_i_t = annotation['instance_token']
-            if ann_i_t in agent_future.keys():
-                present_pose = np.asarray(annotation['translation'][0:2]).reshape(1, 2)
-                if agent_future[ann_i_t].any():
-                    agent_future[ann_i_t] = np.concatenate((present_pose, agent_future[ann_i_t]))
-                else:
-                    agent_future[ann_i_t] = present_pose
 
         # Filter for agent type
         agent_list = []
-        agent_future_list = []
         agent_i_ts = []
         for k, v in agent_details.items():
             if v and agent_type in v[0]['category_name'] and v[0]['instance_token'] != i_t:
                 agent_list.append(agent_hist[k])
-                agent_future_list.append(agent_future[k])
                 agent_i_ts.append(v[0]['instance_token'])
 
         # Convert to target agent's frame of reference
         for agent in agent_list:
-            for n, pose in enumerate(agent):
-                local_pose = self.global_to_local(origin, (pose[0], pose[1], 0))
-                agent[n] = np.asarray([local_pose[0], local_pose[1]])
-
-        for agent in agent_future_list:
             for n, pose in enumerate(agent):
                 local_pose = self.global_to_local(origin, (pose[0], pose[1], 0))
                 agent[n] = np.asarray([local_pose[0], local_pose[1]])
@@ -335,20 +309,8 @@ class NuScenesVector(NuScenesTrajectories):
             motion_states = motion_states[-len(xy):, :]
             agent_list[n] = np.concatenate((xy, motion_states), axis=1)
 
-        for n, agent in enumerate(agent_future_list):
-            motion_states = self.get_past_motion_states(agent_i_ts[n], s_t, self.t_f)
-            motion_states = motion_states[-len(xy):, :]
-            agent_future_list[n] = np.concatenate((xy, motion_states), axis=1)
 
-        print("agent_list len: ", len(agent_list))
-        print("agent_future_list len: ", len(agent_future_list))
-        print("agent_list[0] shape: ", agent_list[0].shape)
-        print("agent_future_list[0] shape: ", agent_future_list[0].shape)
-        print("agent_list[0]: ", agent_list[0])
-        print("agent_future_list[0]: ", agent_future_list[0])
-        print("------------------------------------------")
-
-        return agent_list, agent_future_list
+        return agent_list
 
     def discard_poses_outside_extent(self, pose_set: List[np.ndarray],
                                      ids: List[str] = None) -> Union[List[np.ndarray],
@@ -396,16 +358,68 @@ class NuScenesVector(NuScenesTrajectories):
         """
         Returns past motion states: v, a, yaw_rate for a given instance and sample token over t_steps seconds
         """
-        motion_states = np.zeros((2 * t_steps + 1, 3))
-        motion_states[-1, 0] = self.helper.get_velocity_for_agent(i_t, s_t)
-        motion_states[-1, 1] = self.helper.get_acceleration_for_agent(i_t, s_t)
-        motion_states[-1, 2] = self.helper.get_heading_change_rate_for_agent(i_t, s_t)
+        annotation = self.helper.get_sample_annotation(i_t, s_t)
+
+        motion_states = np.zeros((2 * t_steps + 1, 12))
+        yaw_rate = self.helper.get_heading_change_rate_for_agent(i_t, s_t)
+        velocity = self.helper.get_velocity_for_agent(i_t, s_t)
+        acceleration = self.helper.get_acceleration_for_agent(i_t, s_t)
+        yaw = quaternion_yaw(Quaternion(annotation['rotation']))
+
+        hx, hy = np.cos(yaw), np.sin(yaw)
+        vx, vy = velocity * hx, velocity * hy
+        ax, ay = acceleration * hx, acceleration * hy
+        bbox = annotation['size']
+        
+        attrib_index = -1
+        if len(annotation['attribute_tokens']) > 0:
+            attribute_token = annotation['attribute_tokens'][0]
+            if attribute_token in self.class_token_to_index:
+                attrib_index = self.class_token_to_index[attribute_token]
+            else:
+                print("This token shouldn't even exist: ", attribute_token)
+
+        motion_states[-1, :] = np.array([vx, vy, ax, ay, yaw_rate, velocity, acceleration, yaw, bbox[0], bbox[1], bbox[2], attrib_index])
+        
+
         hist = self.helper.get_past_for_agent(i_t, s_t, seconds=t_steps, in_agent_frame=True, just_xy=False)
 
         for k in range(len(hist)):
-            motion_states[-(k + 2), 0] = self.helper.get_velocity_for_agent(i_t, hist[k]['sample_token'])
-            motion_states[-(k + 2), 1] = self.helper.get_acceleration_for_agent(i_t, hist[k]['sample_token'])
-            motion_states[-(k + 2), 2] = self.helper.get_heading_change_rate_for_agent(i_t, hist[k]['sample_token'])
+            # yaw_rate
+            yaw_rate = self.helper.get_heading_change_rate_for_agent(i_t, hist[k]['sample_token'])
+            # velocity
+            velocity = self.helper.get_velocity_for_agent(i_t, hist[k]['sample_token'])
+            # acceleration
+            acceleration = self.helper.get_acceleration_for_agent(i_t, hist[k]['sample_token'])
+            # yaw
+            yaw = quaternion_yaw(Quaternion(hist[k]['rotation']))
+            # bbox
+            bbox = hist[k]['size']
+
+            if np.isnan(yaw_rate):
+                yaw_rate = 0.0
+            if np.isnan(velocity):
+                velocity = 0.0
+            if np.isnan(acceleration):
+                acceleration = 0.0
+            if np.isnan(yaw):
+                yaw = 0.0
+
+            hx, hy = np.cos(yaw), np.sin(yaw)
+            vx, vy = velocity * hx, velocity * hy
+            ax, ay = acceleration * hx, acceleration * hy
+
+            attrib_index = -1
+            if len(hist[k]['attribute_tokens']) > 0:
+                attribute_token = hist[k]['attribute_tokens'][0]
+                if attribute_token in self.class_token_to_index:
+                    attrib_index = self.class_token_to_index[attribute_token]
+                else:
+                    print("This token shouldn't even exist: ", attribute_token)
+
+            motion_states[-(k + 2), :] = np.array([vx, vy, ax, ay, yaw_rate, velocity, acceleration, yaw, bbox[0], bbox[1], bbox[2], attrib_index])
+
+        
 
         motion_states = np.nan_to_num(motion_states)
         return motion_states

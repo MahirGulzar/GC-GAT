@@ -99,7 +99,18 @@ class PGPModEncoder(PredictionEncoder):
         """
 
         # Encode target agent
-        target_agent_feats = inputs['target_agent_representation']
+        target_agent_feats_full = inputs['target_agent_representation']
+
+        # x, y, yaw, velocity, acceleration, yaw_rate, bbox_area
+        target_agent_feats = torch.ones((32, 5, 7), device=device)
+        target_agent_feats[:, :, 0] = target_agent_feats_full[:, :, 0] 
+        target_agent_feats[:, :, 1] = target_agent_feats_full[:, :, 1]
+        target_agent_feats[:, :, 2] = target_agent_feats_full[:, :, 9]
+        target_agent_feats[:, :, 3] = target_agent_feats_full[:, :, 7]
+        target_agent_feats[:, :, 4] = target_agent_feats_full[:, :, 8]
+        target_agent_feats[:, :, 5] = target_agent_feats_full[:, :, 6]
+        target_agent_feats[:, :, 6] = target_agent_feats_full[:, :, 10] * target_agent_feats_full[:, :, 11]
+
         target_agent_embedding = self.leaky_relu(self.target_agent_emb(target_agent_feats))
         _, target_agent_enc = self.target_agent_enc(target_agent_embedding)
 

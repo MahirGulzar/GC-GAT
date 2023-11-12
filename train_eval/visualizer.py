@@ -77,8 +77,11 @@ class Visualizer:
             if i_t not in unique_instance_tokens:
                 unique_instance_tokens.append(i_t)
 
-        instance_tokens_to_visualize = [54, 98, 91, 5, 114, 144, 291, 204, 312, 187, 36, 267, 146]
+        # instance_tokens_to_visualize = [54, 98, 91, 5, 114, 144, 291, 204, 312, 187, 36, 267, 146]
+        print("len(unique_instance_tokens): ", len(unique_instance_tokens))
+        print("------------------------")
 
+        instance_tokens_to_visualize = list(range(0, 200, 1))
         idcs = []
         for i_t_id in instance_tokens_to_visualize:
             idcs_i_t = [i for i in range(len(instance_tokens)) if instance_tokens[i] == unique_instance_tokens[i_t_id]]
