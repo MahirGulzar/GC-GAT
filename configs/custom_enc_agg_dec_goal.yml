@@ -39,7 +39,7 @@ encoder_args:
   node_feat_size: 6
   node_emb_size: 16
   node_enc_size: 32
-  nbr_feat_size: 14
+  nbr_feat_size: 21
   nbr_emb_size: 24
   nbr_enc_size: 32
   num_gat_layers: 2

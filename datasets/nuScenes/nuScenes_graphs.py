@@ -88,10 +88,64 @@ class NuScenesGraphs(NuScenesVector):
         lanes = self.get_lanes_around_agent(global_pose, map_api)
 
         # Get relevant polygon layers from the map_api
-        polygons = self.get_polygons_around_agent(global_pose, map_api)
+        polygons = self.get_polygons_around_agent(global_pose, map_api, ['stop_line', 'ped_crossing'])
 
-        # Get vectorized representation of lanes
-        lane_node_feats, lane_ids = self.get_lane_node_feats(global_pose, lanes, polygons)
+        road_segment_polygons = self.get_polygons_around_agent(global_pose, map_api, ['road_segment'])
+        
+        intersection_polygons = []
+        road_segment_vectors = []
+        max_vertices = 0
+        for poly in road_segment_polygons['road_segment']:
+            if map_api.get('road_segment', list(poly.keys())[0])['is_intersection'] is True:
+                intersection_polygons.append(poly)
+
+                shapely_polygon = list(poly.values())[0]
+                vertices_array = np.array(shapely_polygon.exterior.coords)
+                
+                # Reduce the number of vertices for road_segments, after this they usually don't go above 40
+                if len(vertices_array) > 30:
+                    threshold = (len(vertices_array) // 30) * 0.2
+                    shapely_polygon = shapely_polygon.simplify(threshold, preserve_topology=False)
+                    vertices_array = np.array(shapely_polygon.exterior.coords)
+
+                # Translate the vertices to local co-ordinates
+                vertices_array[:, 0] = global_pose[0] - vertices_array[:, 0]
+                vertices_array[:, 1] = global_pose[1] - vertices_array[:, 1]
+                
+                max_vertices = max(max_vertices, len(vertices_array))
+                if max_vertices > 40:
+                    print("road_segment max_vertices: ", max_vertices)
+                road_segment_vectors.append(vertices_array)
+
+        num_of_intersections = len(road_segment_vectors)
+        road_segment_polygons['road_segment'] = intersection_polygons
+
+        # ---------------------------------------------------------------------------------
+
+        stopline_vectors = []
+        vertices_array = []
+        max_vertices = 0
+        for poly in polygons['stop_line']:
+            shapely_polygon = list(poly.values())[0]
+            vertices_array = np.array(shapely_polygon.exterior.coords)
+
+            # Translate the vertices to local co-ordinates
+            vertices_array[:, 0] = global_pose[0] - vertices_array[:, 0]
+            vertices_array[:, 1] = global_pose[1] - vertices_array[:, 1]
+            
+            max_vertices = max(max_vertices, len(vertices_array))
+            if max_vertices > 10:
+                print("stopline max_vertices: ", max_vertices)
+            stopline_vectors.append(vertices_array)
+
+        num_of_stoplines = len(stopline_vectors)
+
+
+        # ---------------------------------------------------------------------------------
+
+
+        # Get vectorized represlane_idsentation of lanes
+        lane_node_feats, lane_ids = self.get_lane_node_feats(global_pose, lanes, polygons, map_api)
 
         # Discard lanes outside map extent
         lane_node_feats, lane_ids = self.discard_poses_outside_extent(lane_node_feats, lane_ids)
@@ -105,7 +159,7 @@ class NuScenesGraphs(NuScenesVector):
 
         # Add dummy node (0, 0, 0, 0, 0, 0) if no lane nodes are found
         if len(lane_node_feats) == 0:
-            lane_node_feats = [np.zeros((1, 6))]
+            lane_node_feats = [np.zeros((1, 8))]
             e_succ = [[]]
             e_prox = [[]]
 
@@ -122,7 +176,7 @@ class NuScenesGraphs(NuScenesVector):
         s_next, edge_type = self.get_edge_lookup(e_succ, e_prox)
 
         # Convert list of lane node feats to fixed size numpy array and masks
-        lane_node_feats, lane_node_masks = self.list_to_tensor(lane_node_feats, self.max_nodes, self.polyline_length, 6)
+        lane_node_feats, lane_node_masks = self.list_to_tensor(lane_node_feats, self.max_nodes, self.polyline_length, 8)
 
         map_representation = {
             'lane_node_feats': lane_node_feats,
@@ -132,6 +186,24 @@ class NuScenesGraphs(NuScenesVector):
         }
 
         return map_representation
+    
+    @staticmethod
+    def global_to_local_point(origin: Tuple, global_pose: Tuple) -> Tuple:
+        """
+        Converts pose in global co-ordinates to local co-ordinates.
+        :param origin: (x, y) of origin in global co-ordinates
+        :param global_pose: (x, y) in global co-ordinates
+        :return local_pose: (x, y) in local co-ordinates
+        """
+        # Unpack
+        global_x, global_y, _ = global_pose
+        origin_x, origin_y = origin
+
+        # Translate
+        local_x = global_x - origin_x
+        local_y = global_y - origin_y
+
+        return (local_x, local_y)
 
     @staticmethod
     def get_successor_edges(lane_ids: List[str], map_api: NuScenesMap) -> List[List[int]]:
@@ -406,6 +478,9 @@ class NuScenesGraphs(NuScenesVector):
                         dist = np.min(np.linalg.norm(node_locs - ped_loc, axis=1))
                         if dist <= dist_thresh:
                             ped_node_masks[i, j] = 0
+
+        # 1 where dynamic obstacle (vehicle or pedestrian) is not present at lane node
+        # 0 where dynamic obstacle is at proximity of lane node.
 
         agent_node_masks = {'vehicles': vehicle_node_masks, 'pedestrians': ped_node_masks}
         return agent_node_masks
