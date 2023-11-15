@@ -6,7 +6,7 @@ from nuscenes.prediction import PredictHelper
 import numpy as np
 from typing import Dict, Tuple, Union, List
 from scipy.spatial.distance import cdist
-from shapely.geometry import Polygon
+from shapely.geometry import Polygon, Point
 
 
 class NuScenesGraphs(NuScenesVector):
@@ -281,8 +281,6 @@ class NuScenesGraphs(NuScenesVector):
             'stopline_masks': stopline_masks,
             'ped_crossing_feats': ped_crossing_feats,
             'ped_crossing_masks': ped_crossing_masks,
-            # 'walk_way_feats': walk_way_feats,
-            # 'walk_way_masks': walk_way_masks,
             's_next': s_next,
             'edge_type': edge_type
         }
@@ -587,6 +585,7 @@ class NuScenesGraphs(NuScenesVector):
         agent_node_masks = {'vehicles': vehicle_node_masks, 'pedestrians': ped_node_masks}
         return agent_node_masks
 
+    @staticmethod
     def get_agent_cross_walk_masks(hd_map: Dict, agents: Dict, dist_thresh=10) -> Dict:
         """
         Returns key/val masks for agent-node attention layers. All agents except those within a distance threshold of
@@ -614,7 +613,7 @@ class NuScenesGraphs(NuScenesVector):
                         dist = np.min(np.linalg.norm(node_locs - vehicle_loc, axis=1))
                         if dist <= dist_thresh:
                             vehicle_node_masks[i, j] = 0
-                        elif Polygon(node_locs).contains(vehicle_loc):
+                        elif Polygon(node_locs).contains(Point(vehicle_loc[0], vehicle_loc[1])):
                             vehicle_node_masks[i, j] = 0
 
                 for j, ped_feat in enumerate(ped_feats):
@@ -623,7 +622,7 @@ class NuScenesGraphs(NuScenesVector):
                         dist = np.min(np.linalg.norm(node_locs - ped_loc, axis=1))
                         if dist <= dist_thresh:
                             ped_node_masks[i, j] = 0
-                        elif Polygon(node_locs).contains(ped_loc):
+                        elif Polygon(node_locs).contains(Point(ped_loc[0], ped_loc[1])):
                             ped_node_masks[i, j] = 0
 
         # 1 where dynamic obstacle (vehicle or pedestrian) is not present at or inside crosswalk
@@ -632,6 +631,7 @@ class NuScenesGraphs(NuScenesVector):
         agent_cross_walk_masks = {'vehicles': vehicle_node_masks, 'pedestrians': ped_node_masks}
         return agent_cross_walk_masks
     
+    @staticmethod
     def get_vehicle_intersection_masks(hd_map: Dict, agents: Dict, dist_thresh=10) -> Dict:
         """
         Returns key/val masks for agent-node attention layers. All vehicles except those within a distance threshold of
@@ -656,7 +656,7 @@ class NuScenesGraphs(NuScenesVector):
                         dist = np.min(np.linalg.norm(node_locs - vehicle_loc, axis=1))
                         if dist <= dist_thresh:
                             vehicle_node_masks[i, j] = 0
-                        elif Polygon(node_locs).contains(vehicle_loc):
+                        elif Polygon(node_locs).contains(Point(vehicle_loc[0], vehicle_loc[1])):
                             vehicle_node_masks[i, j] = 0
 
         # 1 where dynamic obstacle (vehicle) is not present near or inside the intersection
@@ -665,6 +665,7 @@ class NuScenesGraphs(NuScenesVector):
         vehicle_intersection_masks = {'vehicles': vehicle_node_masks}
         return vehicle_intersection_masks
     
+    @staticmethod
     def get_vehicle_stopline_masks(hd_map: Dict, agents: Dict, dist_thresh=10) -> Dict:
         """
         Returns key/val masks for agent-node attention layers. All vehicles except those within a distance threshold of
@@ -689,7 +690,7 @@ class NuScenesGraphs(NuScenesVector):
                         dist = np.min(np.linalg.norm(node_locs - vehicle_loc, axis=1))
                         if dist <= dist_thresh:
                             vehicle_node_masks[i, j] = 0
-                        elif Polygon(node_locs).contains(vehicle_loc):
+                        elif Polygon(node_locs).contains(Point(vehicle_loc[0], vehicle_loc[1])):
                             vehicle_node_masks[i, j] = 0
 
         # 1 where dynamic obstacle (vehicle) is not present near or inside the stopline
