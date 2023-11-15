@@ -57,6 +57,10 @@ class NuScenesVector(NuScenesTrajectories):
         if self.mode == 'extract_data':
             stats = self.load_stats()
             self.max_nodes = stats['num_lane_nodes']
+            self.max_intersections = stats['num_intersections']
+            self.max_stoplines = stats['num_stoplines']
+            self.max_ped_crossings = stats['num_ped_crossings']
+            # self.max_walkway = stats['num_walkway']
             self.max_vehicles = stats['num_vehicles']
             self.max_pedestrians = stats['num_pedestrians']
 
