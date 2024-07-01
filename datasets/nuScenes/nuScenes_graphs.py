@@ -83,10 +83,13 @@ class NuScenesGraphs(NuScenesVector):
         a_cross_walk_masks = self.get_agent_cross_walk_masks(inputs['map_representation'], inputs['surrounding_agent_representation'])
         v_intersection_masks = self.get_vehicle_intersection_masks(inputs['map_representation'], inputs['surrounding_agent_representation'])
         v_stopline_masks = self.get_vehicle_stopline_masks(inputs['map_representation'], inputs['surrounding_agent_representation'])
+        mp_n_masks = self.get_map_elements_node_masks(inputs['map_representation'])
+
         inputs['agent_node_masks'] = a_n_masks
         inputs['agent_cross_walk_masks'] = a_cross_walk_masks
         inputs['vehicle_intersection_masks'] = v_intersection_masks
         inputs['vehicle_stopline_masks'] = v_stopline_masks
+        inputs['map_elements_node_masks'] = mp_n_masks
 
         return inputs
 
@@ -240,7 +243,7 @@ class NuScenesGraphs(NuScenesVector):
 
         # Get edges:
         e_succ = self.get_successor_edges(lane_ids, map_api)
-        e_prox = self.get_proximal_edges(lane_node_feats, e_succ)
+        # e_prox = self.get_proximal_edges(lane_node_feats, e_succ)
 
         # Concatentate flag indicating whether a node hassss successors to lane node feats
         lane_node_feats = self.add_boundary_flag(e_succ, lane_node_feats)
@@ -249,19 +252,19 @@ class NuScenesGraphs(NuScenesVector):
         if len(lane_node_feats) == 0:
             lane_node_feats = [np.zeros((1, 8))]
             e_succ = [[]]
-            e_prox = [[]]
+            # e_prox = [[]]
 
         # While running the dataset class in 'compute_stats' mode:
         if self.mode == 'compute_stats':
 
-            num_nbrs = [len(e_succ[i]) + len(e_prox[i]) for i in range(len(e_succ))]
+            num_nbrs = [len(e_succ[i]) for i in range(len(e_succ))]
             max_nbrs = max(num_nbrs) if len(num_nbrs) > 0 else 0
             num_nodes = len(lane_node_feats)
 
             return num_nodes, max_nbrs, num_intersections, num_stoplines, num_ped_crossing
 
         # Get edge lookup tables
-        s_next, edge_type = self.get_edge_lookup(e_succ, e_prox)
+        s_next, edge_type = self.get_edge_lookup(e_succ)
 
         # Convert list of lane node feats to fixed size numpy array and masks
         lane_node_feats, lane_node_masks = self.list_to_tensor(lane_node_feats, self.max_nodes, self.polyline_length, 8)
@@ -363,7 +366,7 @@ class NuScenesGraphs(NuScenesVector):
 
         return lane_node_feats
 
-    def get_edge_lookup(self, e_succ: List[List[int]], e_prox: List[List[int]]):
+    def get_edge_lookup(self, e_succ: List[List[int]]):
         """
         Returns edge look up tables
         :param e_succ: Lists of successor edges for each node
@@ -375,7 +378,7 @@ class NuScenesGraphs(NuScenesVector):
         state at that node. shape: [max_nodes, max_nbr_nodes + 1]. Last
 
         edge_type: Look-up table of the same shape as s_next containing integer values for edge types.
-        {0: No edge exists, 1: successor edge, 2: proximal edge, 3: terminal edge}
+        {0: No edge exists, 1: successor edge, 2: terminal edge}
         """
 
         s_next = np.zeros((self.max_nodes, self.max_nbr_nodes + 1))
@@ -384,7 +387,7 @@ class NuScenesGraphs(NuScenesVector):
         for src_node in range(len(e_succ)):
             nbr_idx = 0
             successors = e_succ[src_node]
-            prox_nodes = e_prox[src_node]
+            # prox_nodes = e_prox[src_node]
 
             # Populate successor edges
             for successor in successors:
@@ -393,14 +396,14 @@ class NuScenesGraphs(NuScenesVector):
                 nbr_idx += 1
 
             # Populate proximal edges
-            for prox_node in prox_nodes:
-                s_next[src_node, nbr_idx] = prox_node
-                edge_type[src_node, nbr_idx] = 2
-                nbr_idx += 1
+            # for prox_node in prox_nodes:
+            #     s_next[src_node, nbr_idx] = prox_node
+            #     edge_type[src_node, nbr_idx] = 2
+            #     nbr_idx += 1
 
             # Populate terminal edge
             s_next[src_node, -1] = src_node + self.max_nodes
-            edge_type[src_node, -1] = 3
+            edge_type[src_node, -1] = 2
 
         return s_next, edge_type
 
@@ -699,7 +702,77 @@ class NuScenesGraphs(NuScenesVector):
         vehicle_stopline_masks = {'vehicles': vehicle_node_masks}
         return vehicle_stopline_masks
 
-    def visualize_graph(self, node_feats, intersection_feats, stopline_feats, ped_crossing_feats, walk_way_feats, s_next, edge_type, evf_gt, node_seq, fut_xy):
+    @staticmethod
+    def get_map_elements_node_masks(hd_map: Dict, dist_thresh=10) -> Dict:
+        """
+        Returns key/val masks for agent-node attention layers. All agents except those within a distance threshold of
+        the lane node are masked. The idea is to incorporate local agent context at each lane node.
+        """
+
+        lane_node_feats = hd_map['lane_node_feats']
+        lane_node_masks = hd_map['lane_node_masks']
+        intersection_feats = hd_map['intersection_feats']
+        intersection_masks = hd_map['intersection_masks']
+        ped_crossing_feats = hd_map['ped_crossing_feats']
+        ped_crossing_masks = hd_map['ped_crossing_masks']
+        stopline_feats = hd_map['stopline_feats']
+        stopline_masks = hd_map['stopline_masks']
+
+        intersection_node_masks = np.ones((len(lane_node_feats), len(intersection_feats)))
+        ped_crossing_node_masks = np.ones((len(lane_node_feats), len(ped_crossing_feats)))
+        stopline_node_masks = np.ones((len(lane_node_feats), len(stopline_feats)))
+
+        for i, node_feat in enumerate(lane_node_feats):
+            if (lane_node_masks[i] == 0).any():
+                node_pose_idcs = np.where(lane_node_masks[i][:, 0] == 0)[0]
+                node_locs = node_feat[node_pose_idcs, :2]
+
+                for j, intersection_feat in enumerate(intersection_feats):
+                    if (intersection_masks[j] == 0).any():
+                        # # If any of the intersection vertices are within dist_thresh of the lane node, mask the node
+                        # for k in range(len(intersection_feat)):
+                        #     vertex = intersection_feat[k, :2]
+                        #     dist = np.min(np.linalg.norm(node_locs - vertex, axis=1))
+                        #     if dist <= dist_thresh:
+                        #         intersection_node_masks[i, j] = 0
+                        # If any of the lane node is within the intersection Polygon, mask the node                   
+                        for k in range(len(node_locs)):
+                            if Polygon(intersection_feat).contains(Point(node_locs[k, 0], node_locs[k, 1])):
+                                intersection_node_masks[i, j] = 0
+
+                for j, ped_crossing_feat in enumerate(ped_crossing_feats):
+                    if (ped_crossing_masks[j] == 0).any():
+                        # # If any of the ped_crossing vertices are within dist_thresh of the lane node, mask the node
+                        # for k in range(len(ped_crossing_feat)):
+                        #     vertex = ped_crossing_feat[k, :2]
+                        #     dist = np.min(np.linalg.norm(node_locs - vertex, axis=1))
+                        #     if dist <= dist_thresh:
+                        #         ped_crossing_node_masks[i, j] = 0
+                        # If any of the lane node is within the ped_crossing Polygon, mask the node                   
+                        for k in range(len(node_locs)):
+                            if Polygon(ped_crossing_feat).contains(Point(node_locs[k, 0], node_locs[k, 1])):
+                                ped_crossing_node_masks[i, j] = 0
+                
+                for j, stopline_feat in enumerate(stopline_feats):
+                    if (stopline_masks[j] == 0).any():
+                        # # If any of the stopline vertices are within dist_thresh of the lane node, mask the node
+                        # for k in range(len(stopline_feat)):
+                        #     vertex = stopline_feat[k, :2]
+                        #     dist = np.min(np.linalg.norm(node_locs - vertex, axis=1))
+                        #     if dist <= dist_thresh:
+                        #         stopline_node_masks[i, j] = 0
+                        # If any of the lane node is within the stopline Polygon, mask the node                   
+                        for k in range(len(node_locs)):
+                            if Polygon(stopline_feat).contains(Point(node_locs[k, 0], node_locs[k, 1])):
+                                stopline_node_masks[i, j] = 0
+
+        # 1 where map_element is not present at lane node
+        # 0 where map_element is at proximity of lane node or inside the polygon.
+
+        map_elements_node_masks = {'intersections': intersection_node_masks, 'ped_crossing': ped_crossing_node_masks, 'stopline': stopline_node_masks}
+        return map_elements_node_masks
+
+    def visualize_graph(self, node_feats, s_next, edge_type, evf_gt, node_seq, fut_xy, map_mask_drivable):
         """
         Function to visualize lane graph.
         """
@@ -719,7 +792,7 @@ class NuScenesGraphs(NuScenesVector):
                 for idx, dest_id in enumerate(s_next[src_id]):
                     edge_t = edge_type[src_id, idx]
                     visited = evf_gt[src_id, idx]
-                    if 3 > edge_t > 0:
+                    if 2 > edge_t > 0:
 
                         dest_feats = node_feats[int(dest_id)]
                         feat_len_dest = np.sum(np.sum(np.absolute(dest_feats), axis=1) != 0)
@@ -749,25 +822,39 @@ class NuScenesGraphs(NuScenesVector):
                 s = 200 if visited else 50
                 ax.scatter(x, y, s, c=c)
 
+
+         # import time
+        
+
+        # Visualize the drivable area mask
+        plt.imshow(map_mask_drivable, extent=[self.map_extent[0], self.map_extent[1], -50, 50], cmap='gray')
+        # plt.title('Drivable Area Mask')
+        # plt.show()
+
+        # time.sleep(3)
+
+        # background_color = 'white'
+        # ax.add_patch(map_mask_drivable)
+
         plt.plot(fut_xy[:, 0], fut_xy[:, 1], color='r', lw=3)
 
-        for intersection_feat in intersection_feats:
-            filtered_features = intersection_feat[~np.all(intersection_feat == 0, axis=1)]
-            if len(filtered_features) > 0:
-                polygon = Polygon(filtered_features, fill=False, edgecolor='g', linewidth=2)
-                ax.add_patch(polygon)
+        # for intersection_feat in intersection_feats:
+        #     filtered_features = intersection_feat[~np.all(intersection_feat == 0, axis=1)]
+        #     if len(filtered_features) > 0:
+        #         polygon = Polygon(filtered_features, fill=False, edgecolor='g', linewidth=2)
+        #         ax.add_patch(polygon)
         
-        for stopline_feat in stopline_feats:
-            filtered_features = stopline_feat[~np.all(stopline_feat == 0, axis=1)]
-            if len(filtered_features) > 0:
-                polygon = Polygon(filtered_features, fill=False, edgecolor='b', linewidth=2)
-                ax.add_patch(polygon)
+        # for stopline_feat in stopline_feats:
+        #     filtered_features = stopline_feat[~np.all(stopline_feat == 0, axis=1)]
+        #     if len(filtered_features) > 0:
+        #         polygon = Polygon(filtered_features, fill=False, edgecolor='b', linewidth=2)
+        #         ax.add_patch(polygon)
         
-        for ped_crossing_feat in ped_crossing_feats:
-            filtered_features = ped_crossing_feat[~np.all(ped_crossing_feat == 0, axis=1)]
-            if len(filtered_features) > 0:
-                polygon = Polygon(filtered_features, fill=True, edgecolor='r', linewidth=2)
-                ax.add_patch(polygon)
+        # for ped_crossing_feat in ped_crossing_feats:
+        #     filtered_features = ped_crossing_feat[~np.all(ped_crossing_feat == 0, axis=1)]
+        #     if len(filtered_features) > 0:
+        #         polygon = Polygon(filtered_features, fill=True, edgecolor='r', linewidth=2)
+        #         ax.add_patch(polygon)
 
         # for walk_way_feat in walk_way_feats:
         #     filtered_features = walk_way_feat[~np.all(walk_way_feat == 0, axis=1)]

@@ -5,9 +5,111 @@ from typing import Dict
 from torch.distributions import Categorical
 from positional_encodings.torch_encodings import PositionalEncoding1D
 
+from ..pe import PositionalEncoding
 
 # Initialize device:
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+
+
+# class ACInteraction(PredictionEncoder):
+#     def __init__(self, args: Dict):
+#         super().__init__()
+
+#         self.hidden_size = args['hidden_size']
+#         self.future_steps = args['op_len']
+#         self.num_nodes = args['num_modes']
+
+#         self.q1 = nn.Linear(self.hidden_size, self.hidden_size)
+#         self.k1 = nn.Linear(self.hidden_size, self.hidden_size)
+#         self.v1 = nn.Linear(self.hidden_size, self.hidden_size)
+#         self.tl_attn = nn.MultiheadAttention(self.hidden_size, num_heads=args['num_heads'])
+
+#         self.q2 = nn.Linear(self.hidden_size, self.hidden_size)
+#         self.k2 = nn.Linear(self.hidden_size, self.hidden_size)
+#         self.v2 = nn.Linear(self.hidden_size, self.hidden_size)
+#         self.ta_attn = nn.MultiheadAttention(self.hidden_size, num_heads=args['num_heads'])
+#         self.mix = nn.Linear(self.hidden_size*3, self.hidden_size)
+
+#         # attn
+#         self.exp_attn = nn.MultiheadAttention(self.hidden_size, num_heads=args['num_heads'])
+#         self.social_attn = nn.MultiheadAttention(self.hidden_size, num_heads=args['num_heads'])
+#         self.node_attn = nn.MultiheadAttention(self.hidden_size, num_heads=1)
+
+#         # normalization
+#         self.norm1 = nn.LayerNorm(self.hidden_size)
+#         self.norm2 = nn.LayerNorm(self.hidden_size)
+#         self.norm3 = nn.LayerNorm(self.hidden_size)
+#         self.dropout1 = nn.Dropout(args['dropout'])
+#         self.dropout2 = nn.Dropout(args['dropout'])
+#         self.dropout3 = nn.Dropout(args['dropout'])
+
+#         # anchor-base queries
+#         self.anchor_queries = nn.Embedding(self.num_nodes, self.hidden_size)  # (K, D)
+#         self.pe = PositionalEncoding(self.hidden_size, 10000)
+
+#         self.pi = nn.Sequential(
+#             nn.Linear(self.hidden_size * 2, self.hidden_size),
+#             nn.LayerNorm(self.hidden_size),
+#             nn.ReLU(inplace=True),
+#             nn.Linear(self.hidden_size, self.hidden_size),
+#             nn.LayerNorm(self.hidden_size),
+#             nn.ReLU(inplace=True),
+#             nn.Linear(self.hidden_size, 1))
+
+#     def forward(self, encodings: Dict) -> Dict:
+
+#         target_enc = encodings['target_agent_state']  # (1, B, D)
+#         nbr_enc = encodings['surrounding_agent_encoding'].transpose(0, 1)  # (N, B, D)
+#         lane_node_enc = encodings['context_encoding'].transpose(0, 1)  # (N, B, D)
+
+#         # T-L & T-A attention
+#         q1 = self.q1(target_enc)  # (1, B, D)
+#         k1 = self.k1(lane_node_enc)  # (N, B, D)
+#         v1 = self.v1(lane_node_enc)  # (N, B, D)
+#         lane_node_attn = self.tl_attn(q1, k1, v1)[0]  # (1, B, D)
+
+#         q2 = self.q2(target_enc)  # (1, B, D)
+#         k2 = self.k2(nbr_enc)  # (N, B, D)
+#         v2 = self.v2(nbr_enc)  # (N, B, D)
+#         nbr_attn = self.ta_attn(q2, k2, v2)[0]  # (1, B, D)
+#         target_enc = self.mix(torch.cat((target_enc, lane_node_attn, nbr_attn), dim=-1))  # (1, B, D)
+
+#         target_enc = target_enc.repeat(self.num_nodes, 1, 1)  # (K, B, D)
+#         target = target_enc.reshape(-1, self.hidden_size).unsqueeze(0)  # [1, K x B, D]
+
+#         anchor_queries = self.anchor_queries.weight.unsqueeze(1).repeat(1, target_enc.shape[1], 1)  # (K, B, D)
+
+#         # Anchor-based Queries
+#         mode_query_states = anchor_queries + target_enc  # (K, B, D)
+#         # mode_query_states = torch.zeros_like(anchor_queries)  # (K, B, D)
+#         pos = self.pe(mode_query_states)
+
+#         # Temporal Experience Attention
+#         exp_attn = self.exp_attn(mode_query_states, target_enc + pos, target_enc)[0]  # (K, B, D)
+#         mode_query_states = mode_query_states + self.dropout1(exp_attn)  # (K, B, D)
+#         mode_query_states = self.norm1(mode_query_states)  # (K, B, D)
+
+#         # Lane-node Attention
+#         lane_node_attn = self.node_attn(mode_query_states, lane_node_enc + pos, lane_node_enc)[0]
+#         mode_query_states = mode_query_states + self.dropout2(lane_node_attn)  # (K, B, D)
+#         mode_query_states = self.norm2(mode_query_states)  # (K, B, D)
+
+#         # Social Attention
+#         social_attn = self.social_attn(mode_query_states, nbr_enc + pos, nbr_enc)[0]  # (K, B, D)
+#         mode_query_states = mode_query_states + self.dropout3(social_attn)  # (K, B, D)
+#         query_states = self.norm3(mode_query_states)  # (K, B, D)
+
+#         mode_query_states = query_states.reshape(-1, self.hidden_size)  # [K x B, D]
+#         mode_query_states = mode_query_states.expand(self.future_steps, *mode_query_states.shape)  # [H, K x B, D]
+
+#         # pi
+#         pi = self.pi(torch.cat((query_states, target_enc), -1)).squeeze(-1).t()  # [B, K]
+
+#         encodings = {'mode_query_states': mode_query_states,
+#                      'target': target,
+#                      'pi': pi
+#                      }
+#         return encodings
 
 
 class PGP(PredictionAggregator):
@@ -44,6 +146,14 @@ class PGP(PredictionAggregator):
         self.leaky_relu = nn.LeakyReLU()
         self.log_softmax = nn.LogSoftmax(dim=2)
 
+        # Define a linear layer to reshape from (15, 10) to (10)
+        self.pi_final = nn.Linear(150, 10)
+        self.pi_final_softmax = nn.LogSoftmax(dim=1)
+
+        # Additional layers to reduce the final output to the desired shape
+        # self.fc1 = nn.Linear(15, 128)
+        # self.fc2 = nn.Linear(128, 10)
+
         # For sampling policy
         self.horizon = args['horizon']
         self.num_samples = args['num_samples']
@@ -54,6 +164,50 @@ class PGP(PredictionAggregator):
         self.key_emb = nn.Linear(args['node_enc_size'], args['emb_size'])
         self.val_emb = nn.Linear(args['node_enc_size'], args['emb_size'])
         self.mha = nn.MultiheadAttention(args['emb_size'], args['num_heads'])
+
+
+        # ----------------------------------------------------------
+
+        self.hidden_size = args['hidden_size']
+        self.future_steps = args['op_len']
+        self.num_nodes = args['num_modes']
+
+        self.q1 = nn.Linear(self.hidden_size, self.hidden_size)
+        self.k1 = nn.Linear(self.hidden_size, self.hidden_size)
+        self.v1 = nn.Linear(self.hidden_size, self.hidden_size)
+        self.tl_attn = nn.MultiheadAttention(self.hidden_size, num_heads=args['num_heads'])
+
+        self.q2 = nn.Linear(self.hidden_size, self.hidden_size)
+        self.k2 = nn.Linear(self.hidden_size, self.hidden_size)
+        self.v2 = nn.Linear(self.hidden_size, self.hidden_size)
+        self.ta_attn = nn.MultiheadAttention(self.hidden_size, num_heads=args['num_heads'])
+        self.mix = nn.Linear(self.hidden_size*3, self.hidden_size)
+
+        # attn
+        self.exp_attn = nn.MultiheadAttention(self.hidden_size, num_heads=args['num_heads'])
+        self.social_attn = nn.MultiheadAttention(self.hidden_size, num_heads=args['num_heads'])
+        self.node_attn = nn.MultiheadAttention(self.hidden_size, num_heads=1)
+
+        # normalization
+        self.norm1 = nn.LayerNorm(self.hidden_size)
+        self.norm2 = nn.LayerNorm(self.hidden_size)
+        self.norm3 = nn.LayerNorm(self.hidden_size)
+        self.dropout1 = nn.Dropout(args['dropout'])
+        self.dropout2 = nn.Dropout(args['dropout'])
+        self.dropout3 = nn.Dropout(args['dropout'])
+
+        # anchor-base queries
+        self.anchor_queries = nn.Embedding(self.num_nodes, self.hidden_size)  # (K, D)
+        self.pe = PositionalEncoding(self.hidden_size, 10000)
+
+        self.pi = nn.Sequential(
+            nn.Linear(self.hidden_size * 2, self.hidden_size),
+            nn.LayerNorm(self.hidden_size),
+            nn.ReLU(inplace=True),
+            nn.Linear(self.hidden_size, self.hidden_size),
+            nn.LayerNorm(self.hidden_size),
+            nn.ReLU(inplace=True),
+            nn.Linear(self.hidden_size, 1))
 
     def forward(self, encodings: Dict) -> Dict:
         """
@@ -72,21 +226,100 @@ class PGP(PredictionAggregator):
         edge_type = encodings['edge_type']
 
         # Compute pi (log probs)
-        pi = self.compute_policy(target_agent_encoding, node_encodings, node_masks, s_next, edge_type)
+        pi_graph = self.compute_policy(target_agent_encoding, node_encodings, node_masks, s_next, edge_type)
 
-        # If pretraining model, use ground truth node sequences
-        if self.pre_train and self.training:
-            sampled_traversals = encodings['node_seq_gt'].unsqueeze(1).repeat(1, self.num_samples, 1).long()
-        else:
-            # Sample pi
-            init_node = encodings['init_node']
-            sampled_traversals = self.sample_policy(torch.exp(pi), s_next, init_node)
+        # # If pretraining model, use ground truth node sequences
+        # if self.pre_train and self.training:
+        #     sampled_traversals = encodings['node_seq_gt'].unsqueeze(1).repeat(1, self.num_samples, 1).long()
+        # else:
+        #     # Sample pi
+        #     init_node = encodings['init_node']
+        #     sampled_traversals = self.sample_policy(torch.exp(pi_graph), s_next, init_node)
 
-        # Selectively aggregate context along traversed paths
-        agg_enc = self.aggregate(sampled_traversals, node_encodings, target_agent_encoding)
+        
 
-        outputs = {'agg_encoding': agg_enc, 'pi': pi}
-        return outputs
+        # # Selectively aggregate context along traversed paths
+        # agg_enc = self.aggregate(sampled_traversals, node_encodings, target_agent_encoding)
+
+        # outputs = {'agg_encoding': agg_enc, 'pi_graph': pi_graph}
+
+
+        # --------------------------------------------------------------------
+
+        target_enc = encodings['target_agent_encoding'].unsqueeze(0)  # (1, B, D)
+        nbr_enc = encodings['nbr_encoding'].transpose(0, 1)  # (N, B, D)
+        lane_node_enc = node_encodings.transpose(0, 1)  # (N, B, D)
+
+        # print(target_enc.shape)
+        # print(nbr_enc.shape)
+        # print(lane_node_enc.shape)
+
+        # T-L & T-A attention
+        q1 = self.q1(target_enc)  # (1, B, D)
+        k1 = self.k1(lane_node_enc)  # (N, B, D)
+        v1 = self.v1(lane_node_enc)  # (N, B, D)
+        lane_node_attn = self.tl_attn(q1, k1, v1)[0]  # (1, B, D)
+
+        q2 = self.q2(target_enc)  # (1, B, D)
+        k2 = self.k2(nbr_enc)  # (N, B, D)
+        v2 = self.v2(nbr_enc)  # (N, B, D)
+        nbr_attn = self.ta_attn(q2, k2, v2)[0]  # (1, B, D)
+        target_enc = self.mix(torch.cat((target_enc, lane_node_attn, nbr_attn), dim=-1))  # (1, B, D)
+
+        target_enc = target_enc.repeat(self.num_nodes, 1, 1)  # (K, B, D)
+        target = target_enc.reshape(-1, self.hidden_size).unsqueeze(0)  # [1, K x B, D]
+
+        anchor_queries = self.anchor_queries.weight.unsqueeze(1).repeat(1, target_enc.shape[1], 1)  # (K, B, D)
+
+        # Anchor-based Queries
+        mode_query_states = anchor_queries + target_enc  # (K, B, D)
+        # mode_query_states = torch.zeros_like(anchor_queries)  # (K, B, D)
+        pos = self.pe(mode_query_states)
+
+        # Temporal Experience Attention
+        exp_attn = self.exp_attn(mode_query_states, target_enc + pos, target_enc)[0]  # (K, B, D)
+        mode_query_states = mode_query_states + self.dropout1(exp_attn)  # (K, B, D)
+        mode_query_states = self.norm1(mode_query_states)  # (K, B, D)
+
+        # Lane-node Attention
+        lane_node_attn = self.node_attn(mode_query_states, lane_node_enc + pos, lane_node_enc)[0]
+        mode_query_states = mode_query_states + self.dropout2(lane_node_attn)  # (K, B, D)
+        mode_query_states = self.norm2(mode_query_states)  # (K, B, D)
+
+        # Social Attention
+        social_attn = self.social_attn(mode_query_states, nbr_enc + pos, nbr_enc)[0]  # (K, B, D)
+        mode_query_states = mode_query_states + self.dropout3(social_attn)  # (K, B, D)
+        query_states = self.norm3(mode_query_states)  # (K, B, D)
+
+        mode_query_states = query_states.reshape(-1, self.hidden_size)  # [K x B, D]
+        mode_query_states = mode_query_states.expand(self.future_steps, *mode_query_states.shape)  # [H, K x B, D]
+
+        # print(query_states.shape)
+        # print(target_enc.shape)
+        # pi
+        pi_attention = self.pi(torch.cat((query_states, target_enc), -1)).squeeze(-1).t()  # [B, K]
+
+        # print(pi_attention.shape)
+        # print(pi_graph.shape)
+        # Create a mask where pi_graph contains NaN values
+        nan_mask = torch.isnan(pi_graph)
+
+        # Replace NaN values in pi_graph with values from pi_attention
+        pi = pi_graph.clone()  # Clone pi_graph to avoid in-place modification
+        pi[nan_mask] = pi_attention[nan_mask]
+
+        # Normalize to give log probabilities
+        pi = torch.log(pi.exp() / pi.exp().sum(dim=-1, keepdim=True))  # Softmax and then log
+
+
+        # print(pi)
+        # print(pi.shape)
+
+        encodings = {'mode_query_states': mode_query_states,
+                     'target': target,
+                     'pi': pi_attention
+                     }
+        return encodings
 
     def aggregate(self, sampled_traversals, node_encodings, target_agent_encoding) -> torch.Tensor:
 
@@ -193,14 +426,14 @@ class PGP(PredictionAggregator):
         node_enc_size = node_encodings.shape[2]
         target_agent_enc_size = target_agent_encoding.shape[1]
 
-        # Gather source node encodigns, destination node encodings, edge encodings and target agent encodings.
+        # Gather source node encodings, destination node encodings, edge encodings and target agent encodings.
         src_node_enc = node_encodings.unsqueeze(2).repeat(1, 1, max_nbrs, 1)
         dst_idcs = s_next[:, :, :-1].reshape(batch_size, -1).long()
         batch_idcs = torch.arange(batch_size).unsqueeze(1).repeat(1, max_nodes * max_nbrs)
         dst_node_enc = node_encodings[batch_idcs, dst_idcs].reshape(batch_size, max_nodes, max_nbrs, node_enc_size)
         target_agent_enc = target_agent_encoding.unsqueeze(1).unsqueeze(2).repeat(1, max_nodes, max_nbrs, 1)
         edge_enc = torch.cat((torch.as_tensor(edge_type[:, :, :-1] == 1, device=device).unsqueeze(3).float(),
-                              torch.as_tensor(edge_type[:, :, :-1] == 2, device=device).unsqueeze(3).float()), dim=3)
+                            torch.as_tensor(edge_type[:, :, :-1] == 2, device=device).unsqueeze(3).float()), dim=3)
         enc = torch.cat((target_agent_enc, src_node_enc, dst_node_enc, edge_enc), dim=3)
         enc_goal = torch.cat((target_agent_enc[:, :, 0, :], src_node_enc[:, :, 0, :]), dim=2)
 
@@ -222,5 +455,23 @@ class PGP(PredictionAggregator):
         pi = torch.cat((pi, pi_goal), dim=-1)
         op_masks = torch.log(torch.as_tensor(edge_type != 0).float())
         pi = self.log_softmax(pi + op_masks)
+        pi = pi[:, :10]
 
-        return pi
+
+        # # Example tensor with shape (batch_size, 15, 10)
+        # batch_size = 32
+        # tensor_shape = (batch_size, 15, 10)
+        # example_tensor = torch.randn(tensor_shape)
+
+        # # Define a linear layer to reshape from (15, 10) to (10)
+        # linear_layer = nn.Linear(15, 10)
+
+        # Reshape the tensor
+        reshaped_tensor = pi.view(batch_size, -1)  # Flatten along the second dimension
+        # print(reshaped_tensor.shape)
+        reshaped_tensor = self.pi_final(reshaped_tensor)  # Apply linear transformation
+        # print(reshaped_tensor.shape)
+        reshaped_tensor = self.pi_final_softmax(reshaped_tensor)  
+        # print(reshaped_tensor.shape)
+
+        return reshaped_tensor

@@ -25,12 +25,12 @@ def preprocess_data(cfg: Dict, data_root: str, data_dir: str, compute_stats=True
     specific_args = get_specific_args(cfg['dataset'], data_root, cfg['version'] if 'version' in cfg.keys() else None)
 
     # Compute stats
-    if compute_stats:
-        train_set = initialize_dataset(ds_type, ['compute_stats', data_dir, cfg['train_set_args']] + specific_args)
-        val_set = initialize_dataset(ds_type, ['compute_stats', data_dir, cfg['val_set_args']] + specific_args)
-        test_set = initialize_dataset(ds_type, ['compute_stats', data_dir, cfg['test_set_args']] + specific_args)
-        compute_dataset_stats([train_set, val_set, test_set], cfg['batch_size'], cfg['num_workers'],
-                              verbose=cfg['verbosity'])
+    # if compute_stats:
+    #     train_set = initialize_dataset(ds_type, ['compute_stats', data_dir, cfg['train_set_args']] + specific_args)
+    #     val_set = initialize_dataset(ds_type, ['compute_stats', data_dir, cfg['val_set_args']] + specific_args)
+    #     test_set = initialize_dataset(ds_type, ['compute_stats', data_dir, cfg['test_set_args']] + specific_args)
+    #     compute_dataset_stats([train_set, val_set, test_set], cfg['batch_size'], cfg['num_workers'],
+    #                           verbose=cfg['verbosity'])
 
     # Extract data
     if extract:

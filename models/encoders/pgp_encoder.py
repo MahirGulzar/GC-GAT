@@ -96,12 +96,12 @@ class PGPEncoder(PredictionEncoder):
         target_agent_embedding = self.leaky_relu(self.target_agent_emb(target_agent_feats))
         _, target_agent_enc = self.target_agent_enc(target_agent_embedding)
 
-        print("target_agent_embedding.shape --> ", target_agent_embedding.shape)
-        print("target_agent_enc.shape --> ", target_agent_enc.shape)
+        # print("target_agent_embedding.shape --> ", target_agent_embedding.shape)
+        # print("target_agent_enc.shape --> ", target_agent_enc.shape)
 
         target_agent_enc = target_agent_enc.squeeze(0)
 
-        print("target_agent_enc.shape squeeze(0)--> ", target_agent_enc.shape)
+        # print("target_agent_enc.shape squeeze(0)--> ", target_agent_enc.shape)
         
 
         # Encode lane nodes
@@ -112,34 +112,38 @@ class PGPEncoder(PredictionEncoder):
 
         # Encode surrounding agents
         nbr_vehicle_feats = inputs['surrounding_agent_representation']['vehicles']
-        nbr_vehicle_feats = torch.cat((nbr_vehicle_feats, torch.zeros_like(nbr_vehicle_feats[:, :, :, 0:1])), dim=-1)
         nbr_vehicle_masks = inputs['surrounding_agent_representation']['vehicle_masks']
+        # nbr_vehicle_feats
+        nbr_vehicle_feats = torch.cat((nbr_vehicle_feats, torch.zeros_like(nbr_vehicle_feats[:, :, :, 0:1])), dim=-1)
+        # nbr_vehicle_masks = inputs['surrounding_agent_representation']['vehicle_masks']
         nbr_vehicle_embedding = self.leaky_relu(self.nbr_emb(nbr_vehicle_feats))
         nbr_vehicle_enc = self.variable_size_gru_encode(nbr_vehicle_embedding, nbr_vehicle_masks, self.nbr_enc)
 
-        print("nbr_vehicle_embedding.shape --> ", nbr_vehicle_embedding.shape)
-        print("nbr_vehicle_enc.shape --> ", nbr_vehicle_enc.shape)
+        # print("nbr_vehicle_embedding.shape --> ", nbr_vehicle_embedding.shape)
+        # print("nbr_vehicle_enc.shape --> ", nbr_vehicle_enc.shape)
 
         nbr_ped_feats = inputs['surrounding_agent_representation']['pedestrians']
-        nbr_ped_feats = torch.cat((nbr_ped_feats, torch.ones_like(nbr_ped_feats[:, :, :, 0:1])), dim=-1)
         nbr_ped_masks = inputs['surrounding_agent_representation']['pedestrian_masks']
+        nbr_ped_feats = torch.cat((nbr_ped_feats, torch.ones_like(nbr_ped_feats[:, :, :, 0:1])), dim=-1)
+        # nbr_ped_masks = inputs['surrounding_agent_representation']['pedestrian_masks']
         nbr_ped_embedding = self.leaky_relu(self.nbr_emb(nbr_ped_feats))
         nbr_ped_enc = self.variable_size_gru_encode(nbr_ped_embedding, nbr_ped_masks, self.nbr_enc)
 
-        print("nbr_ped_embedding.shape --> ", nbr_ped_embedding.shape)
-        print("nbr_ped_enc.shape --> ", nbr_ped_enc.shape)
+        # print("nbr_ped_embedding.shape --> ", nbr_ped_embedding.shape)
+        # print("nbr_ped_enc.shape --> ", nbr_ped_enc.shape)
 
         # Agent-node attention
         nbr_encodings = torch.cat((nbr_vehicle_enc, nbr_ped_enc), dim=1)
+        # nbr_encodings = target_agent_enc.unsqueeze(1)
 
-        print("nbr_encodings.shape --> ", nbr_encodings.shape)
-        print("-------------------")
+        # print("nbr_encodings.shape --> ", nbr_encodings.shape)
+        # print("-------------------")
         queries = self.query_emb(lane_node_enc).permute(1, 0, 2)
         keys = self.key_emb(nbr_encodings).permute(1, 0, 2)
         vals = self.val_emb(nbr_encodings).permute(1, 0, 2)
-        attn_masks = torch.cat((inputs['agent_node_masks']['vehicles'],
-                                inputs['agent_node_masks']['pedestrians']), dim=2)
-        att_op, _ = self.a_n_att(queries, keys, vals, attn_mask=attn_masks)
+        # attn_masks = torch.cat((inputs['agent_node_masks']['vehicles'],
+        #                         inputs['agent_node_masks']['pedestrians']), dim=2)
+        att_op, _ = self.a_n_att(queries, keys, vals)
         att_op = att_op.permute(1, 0, 2)
 
         # Concatenate with original node encodings and 1x1 conv
@@ -158,6 +162,7 @@ class PGPEncoder(PredictionEncoder):
 
         # Return encodings
         encodings = {'target_agent_encoding': target_agent_enc,
+                     'nbr_encoding': nbr_encodings,
                      'context_encoding': {'combined': lane_node_enc,
                                           'combined_masks': lane_node_masks,
                                           'map': None,

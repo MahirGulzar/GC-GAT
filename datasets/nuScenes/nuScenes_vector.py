@@ -12,6 +12,7 @@ import os
 import pickle
 import torch
 import json
+import matplotlib.pyplot as plt
 
 mapping_dict = {
             'YIELD':1,
@@ -184,8 +185,8 @@ class NuScenesVector(NuScenesTrajectories):
             return len(vehicles), len(pedestrians)
 
         # Convert to fixed size arrays for batching
-        vehicles, vehicle_masks = self.list_to_tensor(vehicles, self.max_vehicles, self.t_h * 2 + 1, 21)
-        pedestrians, pedestrian_masks = self.list_to_tensor(pedestrians, self.max_pedestrians, self.t_h * 2 + 1, 21)
+        vehicles, vehicle_masks = self.list_to_tensor(vehicles, self.max_vehicles, self.t_h * 2 + 1, 6)
+        pedestrians, pedestrian_masks = self.list_to_tensor(pedestrians, self.max_pedestrians, self.t_h * 2 + 1, 6)
 
 
         surrounding_agent_representation = {
@@ -208,6 +209,20 @@ class NuScenesVector(NuScenesTrajectories):
         x, y = sample_annotation['translation'][:2]
         yaw = quaternion_yaw(Quaternion(sample_annotation['rotation']))
         yaw = correct_yaw(yaw)
+        global_pose = (x, y, yaw)
+
+        return global_pose
+
+    def get_target_agent_global_pose_original(self, idx: int) -> Tuple[float, float, float]:
+        """
+        Returns global pose of target agent
+        :param idx: data index
+        :return global_pose: (x, y, yaw) or target agent in global co-ordinates
+        """
+        i_t, s_t = self.token_list[idx].split("_")
+        sample_annotation = self.helper.get_sample_annotation(i_t, s_t)
+        x, y = sample_annotation['translation'][:2]
+        yaw = quaternion_yaw(Quaternion(sample_annotation['rotation']))
         global_pose = (x, y, yaw)
 
         return global_pose
@@ -372,28 +387,28 @@ class NuScenesVector(NuScenesTrajectories):
         """
         annotation = self.helper.get_sample_annotation(i_t, s_t)
 
-        motion_states = np.zeros((2 * t_steps + 1, 19))
+        motion_states = np.zeros((2 * t_steps + 1, 4))
         yaw_rate = self.helper.get_heading_change_rate_for_agent(i_t, s_t)
         velocity = self.helper.get_velocity_for_agent(i_t, s_t)
         acceleration = self.helper.get_acceleration_for_agent(i_t, s_t)
         yaw = quaternion_yaw(Quaternion(annotation['rotation']))
 
-        hx, hy = np.cos(yaw), np.sin(yaw)
-        vx, vy = velocity * hx, velocity * hy
-        ax, ay = acceleration * hx, acceleration * hy
-        bbox = annotation['size']
+        # hx, hy = np.cos(yaw), np.sin(yaw)
+        # vx, vy = velocity * hx, velocity * hy
+        # ax, ay = acceleration * hx, acceleration * hy
+        # bbox = annotation['size']
         
-        attrib_array = np.zeros((8))
-        attrib_index = -1
-        if len(annotation['attribute_tokens']) > 0:
-            attribute_token = annotation['attribute_tokens'][0]
-            if attribute_token in self.class_token_to_index:
-                attrib_index = self.class_token_to_index[attribute_token]
-                attrib_array[attrib_index] = 1
-            else:
-                print("This token shouldn't even exist: ", attribute_token)
+        # attrib_array = np.zeros((8))
+        # attrib_index = -1
+        # if len(annotation['attribute_tokens']) > 0:
+        #     attribute_token = annotation['attribute_tokens'][0]
+        #     if attribute_token in self.class_token_to_index:
+        #         attrib_index = self.class_token_to_index[attribute_token]
+        #         attrib_array[attrib_index] = 1
+        #     else:
+        #         print("This token shouldn't even exist: ", attribute_token)
 
-        motion_states[-1, :] = np.concatenate((np.array([vx, vy, ax, ay, yaw_rate, velocity, acceleration, yaw, bbox[0], bbox[1], bbox[2]]), attrib_array), axis=0)
+        motion_states[-1, :] = np.array([yaw, velocity, acceleration, yaw_rate])
         
 
         hist = self.helper.get_past_for_agent(i_t, s_t, seconds=t_steps, in_agent_frame=True, just_xy=False)
@@ -408,7 +423,7 @@ class NuScenesVector(NuScenesTrajectories):
             # yaw
             yaw = quaternion_yaw(Quaternion(hist[k]['rotation']))
             # bbox
-            bbox = hist[k]['size']
+            # bbox = hist[k]['size']
 
             if np.isnan(yaw_rate):
                 yaw_rate = 0.0
@@ -419,21 +434,21 @@ class NuScenesVector(NuScenesTrajectories):
             if np.isnan(yaw):
                 yaw = 0.0
 
-            hx, hy = np.cos(yaw), np.sin(yaw)
-            vx, vy = velocity * hx, velocity * hy
-            ax, ay = acceleration * hx, acceleration * hy
+            # hx, hy = np.cos(yaw), np.sin(yaw)
+            # vx, vy = velocity * hx, velocity * hy
+            # ax, ay = acceleration * hx, acceleration * hy
 
-            attrib_array = np.zeros((8))
-            attrib_index = -1
-            if len(hist[k]['attribute_tokens']) > 0:
-                attribute_token = hist[k]['attribute_tokens'][0]
-                if attribute_token in self.class_token_to_index:
-                    attrib_index = self.class_token_to_index[attribute_token]
-                    attrib_array[attrib_index] = 1
-                else:
-                    print("This token shouldn't even exist: ", attribute_token)
+            # attrib_array = np.zeros((8))
+            # attrib_index = -1
+            # if len(hist[k]['attribute_tokens']) > 0:
+            #     attribute_token = hist[k]['attribute_tokens'][0]
+            #     if attribute_token in self.class_token_to_index:
+            #         attrib_index = self.class_token_to_index[attribute_token]
+            #         attrib_array[attrib_index] = 1
+            #     else:
+            #         print("This token shouldn't even exist: ", attribute_token)
 
-            motion_states[-(k + 2), :] = np.concatenate((np.array([vx, vy, ax, ay, yaw_rate, velocity, acceleration, yaw, bbox[0], bbox[1], bbox[2]]), attrib_array), axis=0)
+            motion_states[-(k + 2), :] = np.array([yaw, velocity, acceleration, yaw_rate])
         
 
         motion_states = np.nan_to_num(motion_states)

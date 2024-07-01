@@ -17,11 +17,14 @@ from models.aggregators.concat import Concat
 from models.aggregators.global_attention import GlobalAttention
 from models.aggregators.goal_conditioned import GoalConditioned
 from models.aggregators.pgp import PGP
+from models.aggregators.pass_through import PassThrough
+from models.aggregators.ac_aggregator import ACInteraction
 from models.decoders.mtp import MTP
 from models.decoders.multipath import Multipath
 from models.decoders.covernet import CoverNet
 from models.decoders.lvm import LVM
 from models.decoders.future import Future
+from models.decoders.query_tr import QueryTr
 
 # Import metrics
 from metrics.mtp_loss import MTPLoss
@@ -31,6 +34,7 @@ from metrics.miss_rate import MissRateK
 from metrics.covernet_loss import CoverNetLoss
 from metrics.pi_bc import PiBehaviorCloning
 from metrics.goal_pred_nll import GoalPredictionNLL
+from metrics.LaplaceNLLLoss import LaplaceNLLLoss
 
 from typing import List, Dict, Union
 
@@ -101,8 +105,13 @@ def initialize_aggregator(aggregator_type: str, aggregator_args: Union[Dict, Non
         'concat': Concat,
         'global_attention': GlobalAttention,
         'gc': GoalConditioned,
-        'pgp': PGP
+        'pgp': PGP,
+        'pass_through': PassThrough,
+        'ac_aggregator': ACInteraction
+        
     }
+    if aggregator_type == 'pass_through':
+        return aggregator_mapping[aggregator_type]()
 
     if aggregator_args:
         return aggregator_mapping[aggregator_type](aggregator_args)
@@ -120,7 +129,8 @@ def initialize_decoder(decoder_type: str, decoder_args: Dict):
         'multipath': Multipath,
         'covernet': CoverNet,
         'lvm': LVM,
-        'future': Future
+        'future': Future,
+        'query': QueryTr
     }
 
     return decoder_mapping[decoder_type](decoder_args)
@@ -139,7 +149,8 @@ def initialize_metric(metric_type: str, metric_args: Dict = None):
         'min_fde_k': MinFDEK,
         'miss_rate_k': MissRateK,
         'pi_bc': PiBehaviorCloning,
-        'goal_pred_nll': GoalPredictionNLL
+        'goal_pred_nll': GoalPredictionNLL,
+        'LaplaceLoss': LaplaceNLLLoss
     }
 
     if metric_args is not None:

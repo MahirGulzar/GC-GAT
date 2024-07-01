@@ -2,66 +2,158 @@ from models.encoders.encoder import PredictionEncoder
 import torch
 import torch.nn as nn
 from torch.nn.utils.rnn import pack_padded_sequence
-from typing import Dict
+from typing import Dict, Tuple
+import math
 
 
 # Initialize device:
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
+import numpy as np
+
+
+class PolylineSubgraph(nn.Module):
+
+    def __init__(self, args: Dict):
+        """
+        Polyline subgraph encoder from VectorNet (Gao et al., CVPR 2020).
+        Has N encoder layers. Each layer encodes every feature in a polyline using an MLP with shared
+        weights, followed by a permutation invariant aggregation operator (element-wise max used in the paper).
+        Aggregated vector is concatenated with each independent feature encoding.
+        Layer is repeated N times. Final encodings are passed through the permutation invariant
+        aggregation operator to give polyline encodings.
+
+        args to include
+            'num_layers': int Number of repeated encoder layers
+            'mlp_size':  int Width of MLP hidden layer
+            'lane_feat_size': int Lane feature dimension
+            'agent_feat_size': int Agent feature dimension
+
+        """
+        super().__init__()
+        self.num_layers = args['num_layers']
+        self.mlp_size = args['mlp_size']
+        self.feat_size = args['feat_size']
+
+        # Encoder layers
+
+        """
+        Note: I'm not completely sure if VectorNet uses different MLPs for agents, map polylines and map polygons.
+        The paper doesn't seem to mention this clearly. However, agents and map polylines will typically have different 
+        attribute features. At least the first linear layer has to be different. 
+        Shouldn't affect the global attention aggregator. All final feats will have the same dimensions.
+        """
+
+        polyline_encoders = [nn.Linear(self.feat_size + 2, self.mlp_size)]
+        for n in range(1, self.num_layers):
+            polyline_encoders.append(nn.Linear(self.mlp_size*2, self.mlp_size))
+        self.polyline_encoders = nn.ModuleList(polyline_encoders)
+
+        # Layer norm and relu
+        self.layer_norm = nn.LayerNorm(self.mlp_size)
+        self.relu = nn.ReLU()
+
+    def forward(self, features: torch.Tensor, masks: torch.Tensor) -> Dict:
+
+        # Encode polyline features
+        features = self.convert2vectornet_feat_format(features)
+        masks = masks[:, :, :-1, :]
+        features_enc, masks = self.encode(self.polyline_encoders, features, masks)
+
+        return {'features_enc':features_enc, 'masks': masks}
+
+    def encode(self, encoder_layers: nn.ModuleList, input_feats: torch.Tensor,
+               masks: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Applies encoding layers to a given set of input feats
+        """
+        masks = masks[..., 0]
+        masks[masks == 1] = -math.inf
+
+        encodings = input_feats
+        for n in range(len(encoder_layers)):
+            encodings = self.relu(self.layer_norm(encoder_layers[n](encodings)))
+            encodings = encodings + masks.unsqueeze(-1)
+            agg_enc, _ = torch.max(encodings, dim=2)
+            encodings = torch.cat((encodings, agg_enc.unsqueeze(2).repeat(1, 1, encodings.shape[2], 1)), dim=3)
+            encodings[encodings == -math.inf] = 0
+
+        agg_encoding, _ = torch.max(encodings, dim=2)
+        masks[masks == -math.inf] = 1
+
+        return agg_encoding, masks[..., 0]
+
+    @staticmethod
+    def convert2vectornet_feat_format(feats: torch.Tensor) -> torch.Tensor:
+        """
+        Helper function to convert a tensor of node features to the vectornet format.
+        By default the datasets return node features of the format [x, y, attribute feats...].
+        Vectornet uses the following format [x, y, x_next, y_next, attribute_feats]
+        :param feats: Tensor of feats, shape [batch_size, max_polylines, max_len, feat_dim]
+        :return: Tensor of updated feats, shape [batch_size, max_polylines, max_len, feat_dim + 2]
+        """
+        xy = feats[:, :, :-1, :2]
+        xy_next = feats[:, :, 1:, :2]
+        attr = feats[:, :, :-1, 2:]
+        feats = torch.cat((xy, xy_next, attr), dim=3)
+        return feats
+
 
 class PGPModEncoder(PredictionEncoder):
 
     def __init__(self, args: Dict):
-        """
-        GRU based encoder from PGP. Lane node features and agent histories encoded using GRUs.
-        Additionally, agent-node attention layers infuse each node encoding with nearby agent context.
-        Finally GAT layers aggregate local context at each node.
-
-        args to include:
-
-        target_agent_feat_size: int Size of target agent features
-        target_agent_emb_size: int Size of target agent embedding
-        taret_agent_enc_size: int Size of hidden state of target agent GRU encoder
-
-        node_feat_size: int Size of lane node features
-        node_emb_size: int Size of lane node embedding
-        node_enc_size: int Size of hidden state of lane node GRU encoder
-
-        nbr_feat_size: int Size of neighboring agent features
-        nbr_enb_size: int Size of neighboring agent embeddings
-        nbr_enc_size: int Size of hidden state of neighboring agent GRU encoders
-
-        num_gat_layers: int Number of GAT layers to use.
-        """
-
         super().__init__()
+
+        ############################ <Agents> ################################
 
         # Target agent encoder
         self.target_agent_emb = nn.Linear(args['target_agent_feat_size'], args['target_agent_emb_size'])
         self.target_agent_enc = nn.GRU(args['target_agent_emb_size'], args['target_agent_enc_size'], batch_first=True)
 
+        # Surrounding agent encoder
+        self.nbr_emb = nn.Linear(args['nbr_feat_size'] + 1, args['nbr_emb_size'])
+        self.nbr_enc = nn.GRU(args['nbr_emb_size'], args['nbr_enc_size'], batch_first=True)
+
+
+        ############################ <Map Elements> ################################
+
         # Node encoders
         self.node_emb = nn.Linear(args['node_feat_size'], args['node_emb_size'])
         self.node_encoder = nn.GRU(args['node_emb_size'], args['node_enc_size'], batch_first=True)
-
-        # # Surrounding agent encoder
-        self.nbr_emb = nn.Linear(args['nbr_feat_size'] + 1, args['nbr_emb_size'])
-        self.nbr_enc = nn.GRU(args['nbr_emb_size'], args['nbr_enc_size'], batch_first=True)
 
         # Agent-node attention
         self.query_emb = nn.Linear(args['node_enc_size'], args['node_enc_size'])
         self.key_emb = nn.Linear(args['nbr_enc_size'], args['node_enc_size'])
         self.val_emb = nn.Linear(args['nbr_enc_size'], args['node_enc_size'])
         self.a_n_att = nn.MultiheadAttention(args['node_enc_size'], num_heads=1)
+        self.a_n_mix = nn.Linear(args['node_enc_size']*2, args['node_enc_size'])
+
+
+        # Intersection-node attention
+        self.i_n_query_emb = nn.Linear(args['node_enc_size'], args['node_enc_size'])
+        self.i_n_key_emb = nn.Linear(args['node_enc_size'], args['node_enc_size'])
+        self.i_n_val_emb = nn.Linear(args['node_enc_size'], args['node_enc_size'])
+        self.i_n_att = nn.MultiheadAttention(args['node_enc_size'], num_heads=1)
+        self.i_n_mix = nn.Linear(args['node_enc_size']*2, args['node_enc_size'])
+
+        # Stopline-node attention
+        self.s_n_query_emb = nn.Linear(args['node_enc_size'], args['node_enc_size'])
+        self.s_n_key_emb = nn.Linear(args['node_enc_size'], args['node_enc_size'])
+        self.s_n_val_emb = nn.Linear(args['node_enc_size'], args['node_enc_size'])
+        self.s_n_att = nn.MultiheadAttention(args['node_enc_size'], num_heads=1)
+        self.s_n_mix = nn.Linear(args['node_enc_size']*2, args['node_enc_size'])
+
+        # Crosswalk-node attention
+        self.c_n_query_emb = nn.Linear(args['node_enc_size'], args['node_enc_size'])
+        self.c_n_key_emb = nn.Linear(args['node_enc_size'], args['node_enc_size'])
+        self.c_n_val_emb = nn.Linear(args['node_enc_size'], args['node_enc_size'])
+        self.c_n_att = nn.MultiheadAttention(args['node_enc_size'], num_heads=1)
+        self.c_n_mix = nn.Linear(args['node_enc_size']*2, args['node_enc_size'])
+
+
         self.mix = nn.Linear(args['node_enc_size']*2, args['node_enc_size'])
 
-        # Target agent attention
-        self.target_query_emb = nn.Linear(args['node_enc_size'], args['node_enc_size'])
-        self.target_key_emb = nn.Linear(args['target_agent_enc_size'], args['node_enc_size'])
-        self.target_val_emb = nn.Linear(args['target_agent_enc_size'], args['node_enc_size'])
-        self.t_n_att = nn.MultiheadAttention(args['node_enc_size'], num_heads=1)
-        self.target_mix = nn.Linear(args['node_enc_size']*2, args['node_enc_size'])
-
+        self.final_mix = nn.Linear(args['node_enc_size']*4, args['node_enc_size'])
         # Non-linearities
         self.leaky_relu = nn.LeakyReLU()
 
@@ -97,30 +189,17 @@ class PGPModEncoder(PredictionEncoder):
 
         :return:
         """
+        ############################ <Target Agent> ################################
 
         # Encode target agent
-        target_agent_feats_full = inputs['target_agent_representation']
-
-        # x, y, yaw, velocity, acceleration, yaw_rate, bbox_area
-        target_agent_feats = torch.ones((32, 5, 7), device=device)
-        target_agent_feats[:, :, 0] = target_agent_feats_full[:, :, 0] 
-        target_agent_feats[:, :, 1] = target_agent_feats_full[:, :, 1]
-        target_agent_feats[:, :, 2] = target_agent_feats_full[:, :, 9]
-        target_agent_feats[:, :, 3] = target_agent_feats_full[:, :, 7]
-        target_agent_feats[:, :, 4] = target_agent_feats_full[:, :, 8]
-        target_agent_feats[:, :, 5] = target_agent_feats_full[:, :, 6]
-        target_agent_feats[:, :, 6] = target_agent_feats_full[:, :, 10] * target_agent_feats_full[:, :, 11]
-
+        target_agent_feats = inputs['target_agent_representation']
         target_agent_embedding = self.leaky_relu(self.target_agent_emb(target_agent_feats))
         _, target_agent_enc = self.target_agent_enc(target_agent_embedding)
 
-        #print("target_agent_embedding.shape --> ", target_agent_embedding.shape)
-        #print("target_agent_enc.shape --> ", target_agent_enc.shape)
-
         target_agent_enc = target_agent_enc.squeeze(0)
+    
 
-        #print("target_agent_enc.shape squeeze(0)--> ", target_agent_enc.shape)
-        
+        # ############################ <Lane Nodes> ################################
 
         # Encode lane nodes
         lane_node_feats = inputs['map_representation']['lane_node_feats']
@@ -128,49 +207,107 @@ class PGPModEncoder(PredictionEncoder):
         lane_node_embedding = self.leaky_relu(self.node_emb(lane_node_feats))
         lane_node_enc = self.variable_size_gru_encode(lane_node_embedding, lane_node_masks, self.node_encoder)
 
+        ############################ <Surrounding Agents > ################################
+
         # Encode surrounding agents
         nbr_vehicle_feats = inputs['surrounding_agent_representation']['vehicles']
-        nbr_vehicle_feats = torch.cat((nbr_vehicle_feats, torch.zeros_like(nbr_vehicle_feats[:, :, :, 0:1])), dim=-1)
         nbr_vehicle_masks = inputs['surrounding_agent_representation']['vehicle_masks']
+
+        # nbr_vehicle_feats
+        nbr_vehicle_feats = torch.cat((nbr_vehicle_feats, torch.zeros_like(nbr_vehicle_feats[:, :, :, 0:1])), dim=-1)
+        # nbr_vehicle_masks = inputs['surrounding_agent_representation']['vehicle_masks']
         nbr_vehicle_embedding = self.leaky_relu(self.nbr_emb(nbr_vehicle_feats))
         nbr_vehicle_enc = self.variable_size_gru_encode(nbr_vehicle_embedding, nbr_vehicle_masks, self.nbr_enc)
 
-        #print("nbr_vehicle_embedding.shape --> ", nbr_vehicle_embedding.shape)
-        #print("nbr_vehicle_enc.shape --> ", nbr_vehicle_enc.shape)
 
         nbr_ped_feats = inputs['surrounding_agent_representation']['pedestrians']
-        nbr_ped_feats = torch.cat((nbr_ped_feats, torch.ones_like(nbr_ped_feats[:, :, :, 0:1])), dim=-1)
         nbr_ped_masks = inputs['surrounding_agent_representation']['pedestrian_masks']
+        nbr_ped_feats = torch.cat((nbr_ped_feats, torch.ones_like(nbr_ped_feats[:, :, :, 0:1])), dim=-1)
         nbr_ped_embedding = self.leaky_relu(self.nbr_emb(nbr_ped_feats))
         nbr_ped_enc = self.variable_size_gru_encode(nbr_ped_embedding, nbr_ped_masks, self.nbr_enc)
 
-        # # print("nbr_ped_embedding.shape --> ", nbr_ped_embedding.shape)
-        # # print("nbr_ped_enc.shape --> ", nbr_ped_enc.shape)
+        # Agent-node attention
 
-        # # Agent-node attention
         nbr_encodings = torch.cat((nbr_vehicle_enc, nbr_ped_enc), dim=1)
 
-        # print("nbr_encodings.shape --> ", nbr_encodings.shape)
-        # print("-------------------")
+
+
+        
         queries = self.query_emb(lane_node_enc).permute(1, 0, 2)
         keys = self.key_emb(nbr_encodings).permute(1, 0, 2)
         vals = self.val_emb(nbr_encodings).permute(1, 0, 2)
-        attn_masks = torch.cat((inputs['agent_node_masks']['vehicles'],
+
+
+        a_n_attn_masks = torch.cat((inputs['agent_node_masks']['vehicles'],
                                 inputs['agent_node_masks']['pedestrians']), dim=2)
-        att_op, _ = self.a_n_att(queries, keys, vals, attn_mask=attn_masks)
-        att_op = att_op.permute(1, 0, 2)
+        
+        # print("a_n_attn_masks.shape --> ", a_n_attn_masks.shape)
+        # print("-------------------")
+
+        a_n_att_op, _ = self.a_n_att(queries, keys, vals, attn_mask=a_n_attn_masks)
+        a_n_att_op = a_n_att_op.permute(1, 0, 2)
 
         # Concatenate with original node encodings and 1x1 conv
-        nbr_node_enc = self.leaky_relu(self.mix(torch.cat((lane_node_enc, att_op), dim=2)))
+        a_node_mix = self.leaky_relu(self.a_n_mix(torch.cat((lane_node_enc, a_n_att_op), dim=2)))
 
 
-        lane_node_queries = self.target_query_emb(lane_node_enc).permute(1, 0, 2)
-        target_agent_node_keys = self.target_key_emb(target_agent_enc.unsqueeze(1)).permute(1, 0, 2)
-        target_agent_node_vals = self.target_val_emb(target_agent_enc.unsqueeze(1)).permute(1, 0, 2)
-        t_n_att_op, _ = self.t_n_att(lane_node_queries, target_agent_node_keys, target_agent_node_vals)
-        t_n_att_op = t_n_att_op.permute(1, 0, 2)
+        # Create an identity matrix of shape (164, 164)
+        identity_matrix = torch.eye(lane_node_enc.shape[1], device=device)
+        expanded_identity_matrix = identity_matrix.unsqueeze(0).expand(lane_node_enc.shape[0], -1, -1)
+        
+        
 
-        lane_node_enc = self.leaky_relu(self.target_mix(torch.cat((lane_node_enc, t_n_att_op), dim=2)))
+
+        intersection_masks = inputs['map_elements_node_masks']['intersections']
+        any_zero = torch.any(intersection_masks == 0, dim=2)
+        new_intersection_masks = torch.where(any_zero, torch.tensor(0.0, device=device), torch.tensor(1.0, device=device))
+        new_intersection_masks = expanded_identity_matrix * new_intersection_masks.unsqueeze(2)
+
+        # print("lane_node_enc.shape --> ", lane_node_enc.shape)
+        # print("new_intersection_masks.shape --> ", new_intersection_masks.shape)
+
+        i_n_queries = self.i_n_query_emb(lane_node_enc).permute(1, 0, 2)
+        i_n_keys = self.i_n_key_emb(lane_node_enc).permute(1, 0, 2)
+        i_n_vals = self.i_n_val_emb(lane_node_enc).permute(1, 0, 2)
+        i_n_att_op, _ = self.i_n_att(i_n_queries, i_n_keys, i_n_vals, attn_mask=new_intersection_masks)
+        i_n_att_op = i_n_att_op.permute(1, 0, 2)
+
+        i_n_mix = self.leaky_relu(self.i_n_mix(torch.cat((lane_node_enc, i_n_att_op), dim=2)))
+
+
+        stopline_masks = inputs['map_elements_node_masks']['stopline']
+        any_zero = torch.any(stopline_masks == 0, dim=2)
+        new_stopline_masks = torch.where(any_zero, torch.tensor(0.0, device=device), torch.tensor(1.0, device=device))
+        new_stopline_masks = expanded_identity_matrix * new_stopline_masks.unsqueeze(2)
+
+        s_n_queries = self.s_n_query_emb(lane_node_enc).permute(1, 0, 2)
+        s_n_keys = self.s_n_key_emb(lane_node_enc).permute(1, 0, 2)
+        s_n_vals = self.s_n_val_emb(lane_node_enc).permute(1, 0, 2)
+        s_n_att_op, _ = self.s_n_att(s_n_queries, s_n_keys, s_n_vals, attn_mask=new_stopline_masks)
+        s_n_att_op = s_n_att_op.permute(1, 0, 2)
+
+        s_n_mix = self.leaky_relu(self.s_n_mix(torch.cat((lane_node_enc, s_n_att_op), dim=2)))
+
+
+        crosswalk_masks = inputs['map_elements_node_masks']['ped_crossing']
+        any_zero = torch.any(crosswalk_masks == 0, dim=2)
+        new_crosswalk_masks = torch.where(any_zero, torch.tensor(0.0, device=device), torch.tensor(1.0, device=device))
+        new_crosswalk_masks = expanded_identity_matrix * new_crosswalk_masks.unsqueeze(2)
+
+        c_n_queries = self.c_n_query_emb(lane_node_enc).permute(1, 0, 2)
+        c_n_keys = self.c_n_key_emb(lane_node_enc).permute(1, 0, 2)
+        c_n_vals = self.c_n_val_emb(lane_node_enc).permute(1, 0, 2)
+        c_n_att_op, _ = self.c_n_att(c_n_queries, c_n_keys, c_n_vals, attn_mask=new_crosswalk_masks)
+        c_n_att_op = c_n_att_op.permute(1, 0, 2)
+
+        c_n_mix = self.leaky_relu(self.c_n_mix(torch.cat((lane_node_enc, c_n_att_op), dim=2)))
+        
+
+
+        lane_node_enc = self.leaky_relu(self.mix(torch.cat((lane_node_enc, a_n_att_op), dim=2)))
+
+        lane_node_enc = self.leaky_relu(self.final_mix(torch.cat((lane_node_enc, i_n_mix, s_n_mix, c_n_mix), dim=2)))
+
 
         # GAT layers
         adj_mat = self.build_adj_mat(inputs['map_representation']['s_next'], inputs['map_representation']['edge_type'])
@@ -183,18 +320,12 @@ class PGPModEncoder(PredictionEncoder):
         lane_node_masks = ~lane_node_masks
         lane_node_masks = lane_node_masks.float()
 
+        target_agent_enc = target_agent_enc.unsqueeze(0)
+
         # Return encodings
         encodings = {'target_agent_encoding': target_agent_enc,
-                     'context_encoding': {'combined': lane_node_enc,
-                                          'combined_masks': lane_node_masks,
-                                          'map': None,
-                                          'nbr_encodings':nbr_node_enc,
-                                        #   'vehicles': nbr_vehicle_enc,
-                                        #   'pedestrians': nbr_ped_enc,
-                                          'map_masks': None,
-                                        #   'vehicle_masks': nbr_vehicle_masks,
-                                        #   'pedestrian_masks': nbr_ped_masks
-                                          },
+                     'surrounding_agent_encoding': nbr_encodings,
+                     'context_encoding':lane_node_enc,
                      }
 
         # Pass on initial nodes and edge structure to aggregator if included in inputs
