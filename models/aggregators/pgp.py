@@ -1,8 +1,11 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from models.aggregators.aggregator import PredictionAggregator
 from typing import Dict
 from torch.distributions import Categorical
+from torch.distributions import Categorical
+from models.aggregators.global_attention import GlobalAttention
 from positional_encodings.torch_encodings import PositionalEncoding1D
 
 from ..pe import PositionalEncoding
@@ -112,7 +115,7 @@ device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 #         return encodings
 
 
-class PGP(PredictionAggregator):
+class PGP(GlobalAttention):
     """
     Policy header + selective aggregator from "Multimodal trajectory prediction conditioned on lane graph traversals"
     1) Outputs edge probabilities corresponding to pi_route
@@ -133,42 +136,29 @@ class PGP(PredictionAggregator):
         'num_samples': int, number of sampled traversals (and encodings) to output
         """
 
-        super().__init__()
-        self.pre_train = args['pre_train']
-
-        # Policy header
-        self.pi_h1 = nn.Linear(2 * args['node_enc_size'] + args['target_agent_enc_size'] + 2, args['pi_h1_size'])
-        self.pi_h2 = nn.Linear(args['pi_h1_size'], args['pi_h2_size'])
-        self.pi_op = nn.Linear(args['pi_h2_size'], 1)
-        self.pi_h1_goal = nn.Linear(args['node_enc_size'] + args['target_agent_enc_size'], args['pi_h1_size'])
-        self.pi_h2_goal = nn.Linear(args['pi_h1_size'], args['pi_h2_size'])
-        self.pi_op_goal = nn.Linear(args['pi_h2_size'], 1)
-        self.leaky_relu = nn.LeakyReLU()
-        self.log_softmax = nn.LogSoftmax(dim=2)
-
-        # Define a linear layer to reshape from (15, 10) to (10)
-        self.pi_final = nn.Linear(150, 10)
-        self.pi_final_softmax = nn.LogSoftmax(dim=1)
-
-        # Additional layers to reduce the final output to the desired shape
-        # self.fc1 = nn.Linear(15, 128)
-        # self.fc2 = nn.Linear(128, 10)
-
-        # For sampling policy
-        self.horizon = args['horizon']
+        super(PGP, self).__init__(args)
+        # Goal prediction header
+        self.goal_h1 = nn.Linear(args['context_enc_size'] + args['target_agent_enc_size'], args['goal_h1_size'])
+        self.goal_h2 = nn.Linear(args['goal_h1_size'], args['goal_h2_size'])
+        self.goal_op = nn.Linear(args['goal_h2_size'], 1)
         self.num_samples = args['num_samples']
+        self.leaky_relu = nn.LeakyReLU()
+        self.log_softmax = nn.LogSoftmax(dim=1)
 
-        # Attention based aggregator
-        self.pos_enc = PositionalEncoding1D(args['node_enc_size'])
-        self.query_emb = nn.Linear(args['target_agent_enc_size'], args['emb_size'])
-        self.key_emb = nn.Linear(args['node_enc_size'], args['emb_size'])
-        self.val_emb = nn.Linear(args['node_enc_size'], args['emb_size'])
-        self.mha = nn.MultiheadAttention(args['emb_size'], args['num_heads'])
+        # Pretraining
+        self.pre_train = args['pre_train']
+        self.hidden_size = args['hidden_size']
+
+
+        self.goal_attn = nn.MultiheadAttention(self.hidden_size, num_heads=1)
+
+        self.dropout_goal = nn.Dropout(args['dropout'])
+        self.norm_goal = nn.LayerNorm(self.hidden_size)
 
 
         # ----------------------------------------------------------
 
-        self.hidden_size = args['hidden_size']
+        
         self.future_steps = args['op_len']
         self.num_nodes = args['num_modes']
 
@@ -222,11 +212,11 @@ class PGP(PredictionAggregator):
         target_agent_encoding = encodings['target_agent_encoding']
         node_encodings = encodings['context_encoding']['combined']
         node_masks = encodings['context_encoding']['combined_masks']
-        s_next = encodings['s_next']
-        edge_type = encodings['edge_type']
+        # s_next = encodings['s_next']
+        # edge_type = encodings['edge_type']
 
-        # Compute pi (log probs)
-        pi_graph = self.compute_policy(target_agent_encoding, node_encodings, node_masks, s_next, edge_type)
+        # # Compute pi (log probs)
+        # pi_graph = self.compute_policy(target_agent_encoding, node_encodings, node_masks, s_next, edge_type)
 
         # # If pretraining model, use ground truth node sequences
         # if self.pre_train and self.training:
@@ -238,10 +228,55 @@ class PGP(PredictionAggregator):
 
         
 
-        # # Selectively aggregate context along traversed paths
+        # # # Selectively aggregate context along traversed paths
         # agg_enc = self.aggregate(sampled_traversals, node_encodings, target_agent_encoding)
 
         # outputs = {'agg_encoding': agg_enc, 'pi_graph': pi_graph}
+
+
+        
+        # Predict goal log-probabilities
+        goal_log_probs = self.compute_goal_probs(target_agent_encoding, node_encodings, node_masks)  # [batch_size, num_goals]
+        # print("target_agent_encoding.shape:", target_agent_encoding.shape)  # Expected: [32, 32]
+        # print("node_encodings.shape:", node_encodings.shape)  # Expected: [32, 164, 32]
+        # print("goal_log_probs.shape:", goal_log_probs.shape)  # Expected: [32, 164]
+
+        # Convert log-probabilities to probabilities and apply Gumbel-Softmax
+        temperature = 1.0  # Adjust the temperature parameter as needed
+        # goal_probs = torch.exp(goal_log_probs)
+        goal_probs = torch.softmax(goal_log_probs, dim=-1)  # Convert to probabilities
+        gumbel_softmax_samples = F.gumbel_softmax(goal_probs, tau=temperature, hard=True)  # [batch_size, num_goals]
+        # print("gumbel_softmax_samples.shape:", gumbel_softmax_samples.shape)  # Expected: [32, 164]
+
+        # Aggregate context
+        agg_enc = super(PGP, self).forward(encodings)  # [batch_size, encoding_dim]
+        # print("agg_enc.shape:", agg_enc.shape)  # Expected: [32, 160]
+
+        # Repeat context vector for number of samples
+        agg_enc = agg_enc.unsqueeze(1).repeat(1, 32, 1)  # [batch_size, 32, encoding_dim]
+        # print("agg_enc.shape (repeated):", agg_enc.shape)  # Expected: [32, 32, 160]
+
+        # Expand gumbel_softmax_samples to match the batch and encoding dimensions
+        gumbel_softmax_samples = gumbel_softmax_samples.unsqueeze(1).repeat(1, 32, 1)  # [batch_size, 32, num_goals]
+        # print("gumbel_softmax_samples.shape (expanded):", gumbel_softmax_samples.shape)  # Expected: [32, 32, 164]
+
+        # Perform weighted sum of node_encodings using gumbel_softmax_samples
+        # Here, gumbel_softmax_samples acts as the weights for the goal encodings
+        goal_encodings = torch.matmul(gumbel_softmax_samples, node_encodings)  # [batch_size, 32, encoding_dim]
+        # print("goal_encodings.shape:", goal_encodings.shape)  # Expected: [32, 32, 32]
+
+        # Concatenate agg_enc and goal_encodings
+        agg_enc = torch.cat((agg_enc, goal_encodings), dim=2)  # [batch_size, 32, 2 * encoding_dim]
+        # print("combined_enc.shape:", agg_enc.shape)  # Expected: [32, 32, 192]
+
+
+
+        # agg_enc = torch.cat((agg_enc, goal_encodings), dim=2)
+
+        # (0,1,2) to (2,1,0)
+        agg_enc = agg_enc.permute(2, 0, 1)
+
+        
 
 
         # --------------------------------------------------------------------
@@ -286,6 +321,14 @@ class PGP(PredictionAggregator):
         mode_query_states = mode_query_states + self.dropout2(lane_node_attn)  # (K, B, D)
         mode_query_states = self.norm2(mode_query_states)  # (K, B, D)
 
+
+        # Lane-goal Attention
+        goal_node_attn = self.goal_attn(mode_query_states, agg_enc + pos, agg_enc)[0]
+        mode_query_states = mode_query_states + self.dropout_goal(goal_node_attn)  # (K, B, D)
+        mode_query_states = self.norm_goal(mode_query_states)  # (K, B, D)
+
+        # print(mode_query_states.shape)
+
         # Social Attention
         social_attn = self.social_attn(mode_query_states, nbr_enc + pos, nbr_enc)[0]  # (K, B, D)
         mode_query_states = mode_query_states + self.dropout3(social_attn)  # (K, B, D)
@@ -299,17 +342,17 @@ class PGP(PredictionAggregator):
         # pi
         pi_attention = self.pi(torch.cat((query_states, target_enc), -1)).squeeze(-1).t()  # [B, K]
 
-        # print(pi_attention.shape)
-        # print(pi_graph.shape)
-        # Create a mask where pi_graph contains NaN values
-        nan_mask = torch.isnan(pi_graph)
+        # # print(pi_attention.shape)
+        # # print(pi_graph.shape)
+        # # Create a mask where pi_graph contains NaN values
+        # nan_mask = torch.isnan(pi_graph)
 
-        # Replace NaN values in pi_graph with values from pi_attention
-        pi = pi_graph.clone()  # Clone pi_graph to avoid in-place modification
-        pi[nan_mask] = pi_attention[nan_mask]
+        # # Replace NaN values in pi_graph with values from pi_attention
+        # pi = pi_graph.clone()  # Clone pi_graph to avoid in-place modification
+        # pi[nan_mask] = pi_attention[nan_mask]
 
-        # Normalize to give log probabilities
-        pi = torch.log(pi.exp() / pi.exp().sum(dim=-1, keepdim=True))  # Softmax and then log
+        # # Normalize to give log probabilities
+        # pi = torch.log(pi.exp() / pi.exp().sum(dim=-1, keepdim=True))  # Softmax and then log
 
 
         # print(pi)
@@ -317,7 +360,9 @@ class PGP(PredictionAggregator):
 
         encodings = {'mode_query_states': mode_query_states,
                      'target': target,
-                     'pi': pi_attention
+                     'pi': pi_attention,
+                     'agg_encoding': agg_enc
+                    #  'pi_graph': pi_graph
                      }
         return encodings
 
@@ -455,23 +500,53 @@ class PGP(PredictionAggregator):
         pi = torch.cat((pi, pi_goal), dim=-1)
         op_masks = torch.log(torch.as_tensor(edge_type != 0).float())
         pi = self.log_softmax(pi + op_masks)
-        pi = pi[:, :10]
+        # pi = pi[:, :10]
 
 
-        # # Example tensor with shape (batch_size, 15, 10)
-        # batch_size = 32
-        # tensor_shape = (batch_size, 15, 10)
-        # example_tensor = torch.randn(tensor_shape)
+        # # # Example tensor with shape (batch_size, 15, 10)
+        # # batch_size = 32
+        # # tensor_shape = (batch_size, 15, 10)
+        # # example_tensor = torch.randn(tensor_shape)
 
-        # # Define a linear layer to reshape from (15, 10) to (10)
-        # linear_layer = nn.Linear(15, 10)
+        # # # Define a linear layer to reshape from (15, 10) to (10)
+        # # linear_layer = nn.Linear(15, 10)
 
-        # Reshape the tensor
-        reshaped_tensor = pi.view(batch_size, -1)  # Flatten along the second dimension
-        # print(reshaped_tensor.shape)
-        reshaped_tensor = self.pi_final(reshaped_tensor)  # Apply linear transformation
-        # print(reshaped_tensor.shape)
-        reshaped_tensor = self.pi_final_softmax(reshaped_tensor)  
-        # print(reshaped_tensor.shape)
+        # # Reshape the tensor
+        # reshaped_tensor = pi.view(batch_size, -1)  # Flatten along the second dimension
+        # # print(reshaped_tensor.shape)
+        # reshaped_tensor = self.pi_final(reshaped_tensor)  # Apply linear transformation
+        # # print(reshaped_tensor.shape)
+        # reshaped_tensor = self.pi_final_softmax(reshaped_tensor)  
+        # # print(reshaped_tensor.shape)
 
-        return reshaped_tensor
+        return pi
+    
+
+    def compute_goal_probs(self, target_agent_encoding, node_encodings, node_masks):
+        """
+        Forward pass for goal prediction header
+        :param target_agent_encoding: tensor encoding the target agent's past motion
+        :param node_encodings: tensor of node encodings provided by the encoder
+        :param node_masks: masks indicating whether a node exists for a given index in the tensor
+        :return:
+        """
+        # Useful variables
+        max_nodes = node_encodings.shape[1]
+        target_agent_enc_size = target_agent_encoding.shape[-1]
+        node_enc_size = node_encodings.shape[-1]
+
+        # Concatenate node encodings with target agent encoding
+        target_agent_encoding = target_agent_encoding.unsqueeze(1).repeat(1, max_nodes, 1)
+        enc = torch.cat((target_agent_encoding, node_encodings), dim=2)
+
+        # Form a single batch of encodings
+        masks_goal = ~node_masks.unsqueeze(-1).bool()
+        enc_batched = torch.masked_select(enc, masks_goal).reshape(-1, target_agent_enc_size + node_enc_size)
+
+        # Compute goal log probabilities
+        goal_ops_ = self.goal_op(self.leaky_relu(self.goal_h2(self.leaky_relu(self.goal_h1(enc_batched)))))
+        goal_ops = torch.zeros_like(masks_goal).float()
+        goal_ops = goal_ops.masked_scatter_(masks_goal, goal_ops_).squeeze(-1)
+        goal_log_probs = self.log_softmax(goal_ops + torch.log(1-node_masks))
+
+        return goal_log_probs

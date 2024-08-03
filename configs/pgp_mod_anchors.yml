@@ -59,6 +59,9 @@ aggregator_args:
   dropout: 0.1
   num_modes: 10
   op_len: 12
+  context_enc_size: 32
+  goal_h1_size: 32
+  goal_h2_size: 32
 
 
 # Decoder parameters
@@ -68,6 +71,13 @@ decoder_args:
   op_len: 12
   hidden_size: 32
   min_scale: 0.0001
+
+  num_samples: 32
+  hidden_size_pgp: 128
+  encoding_size: 160
+  agg_type: 'sample_specific'
+  lv_dim: 5
+  num_clusters: 10
 
 
 # Optimizer parameters

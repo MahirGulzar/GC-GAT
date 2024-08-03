@@ -18,7 +18,7 @@ class PiBehaviorCloning(Metric):
         :param ground_truth: Dictionary with 'evf_gt': Look up table with visited edges
         """
         # Unpack arguments
-        pi = predictions['pi']
+        pi = predictions['pi_graph']
         evf_gt = ground_truth['evf_gt']
 
         loss = -torch.sum(pi[evf_gt.bool()]) / pi.shape[0]

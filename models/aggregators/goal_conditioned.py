@@ -37,7 +37,7 @@ class GoalConditioned(GlobalAttention):
         super(GoalConditioned, self).__init__(args)
 
         # Goal prediction header
-        self.goal_h1 = nn.Linear(args['context_enc_size'] + 24, args['goal_h1_size'])
+        self.goal_h1 = nn.Linear(args['context_enc_size'] + args['target_agent_enc_size'], args['goal_h1_size'])
         self.goal_h2 = nn.Linear(args['goal_h1_size'], args['goal_h2_size'])
         self.goal_op = nn.Linear(args['goal_h2_size'], 1)
         self.num_samples = args['num_samples']
@@ -58,12 +58,11 @@ class GoalConditioned(GlobalAttention):
 
         # Unpack encodings:
         target_agent_encoding = encodings['target_agent_encoding']
-        physics_pred = encodings['physics_pred']
         node_encodings = encodings['context_encoding']['combined']
         node_masks = encodings['context_encoding']['combined_masks']
 
         # Predict goal log-probabilities
-        goal_log_probs = self.compute_goal_probs(target_agent_encoding, node_encodings, node_masks, physics_pred)
+        goal_log_probs = self.compute_goal_probs(target_agent_encoding, node_encodings, node_masks)
 
         # If pretraining model, use ground truth goals
         if self.pre_train and self.training:
@@ -83,11 +82,11 @@ class GoalConditioned(GlobalAttention):
         agg_enc = torch.cat((agg_enc, goal_encodings), dim=2)
 
         # Return outputs
-        outputs = {'agg_encoding': agg_enc, 'goal_log_probs': goal_log_probs, 'preds': physics_pred}
+        outputs = {'agg_encoding': agg_enc, 'goal_log_probs': goal_log_probs}
 
         return outputs
 
-    def compute_goal_probs(self, target_agent_encoding, node_encodings, node_masks, physics_pred):
+    def compute_goal_probs(self, target_agent_encoding, node_encodings, node_masks):
         """
         Forward pass for goal prediction header
         :param target_agent_encoding: tensor encoding the target agent's past motion
@@ -102,16 +101,11 @@ class GoalConditioned(GlobalAttention):
 
         # Concatenate node encodings with target agent encoding
         target_agent_encoding = target_agent_encoding.unsqueeze(1).repeat(1, max_nodes, 1)
-        physics_pred = torch.reshape(physics_pred, (physics_pred.shape[0], -1))
-        physics_pred = physics_pred.unsqueeze(1).repeat(1, max_nodes, 1)
-        # print("target_agent_encoding.shape: ", target_agent_encoding.shape)
-        # print("node_encodings.shape: ", node_encodings.shape)
-        # print("physics_pred.shape: ", physics_pred.shape)
-        enc = torch.cat((node_encodings, physics_pred), dim=2)
+        enc = torch.cat((target_agent_encoding, node_encodings), dim=2)
 
         # Form a single batch of encodings
         masks_goal = ~node_masks.unsqueeze(-1).bool()
-        enc_batched = torch.masked_select(enc, masks_goal).reshape(-1, node_enc_size + 24)
+        enc_batched = torch.masked_select(enc, masks_goal).reshape(-1, target_agent_enc_size + node_enc_size)
 
         # Compute goal log probabilities
         goal_ops_ = self.goal_op(self.leaky_relu(self.goal_h2(self.leaky_relu(self.goal_h1(enc_batched)))))
