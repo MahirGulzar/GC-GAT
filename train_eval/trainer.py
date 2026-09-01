@@ -51,8 +51,9 @@ class Trainer:
 
         # Initialize optimizer and scheduler
         self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=cfg['optim_args']['lr'])
-        self.scheduler = torch.optim.lr_scheduler.StepLR(self.optimizer, step_size=cfg['optim_args']['scheduler_step'],
-                                                         gamma=cfg['optim_args']['scheduler_gamma'])
+        self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer=self.optimizer,
+                                                                    T_max=cfg['optim_args']['T_max'],
+                                                                    eta_min=cfg['optim_args']['eta_min'])
 
         # Initialize epochs
         self.current_epoch = 0

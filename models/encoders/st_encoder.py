@@ -34,7 +34,7 @@ class STEncoder(PredictionEncoder):
         # Target agent encoding new
         # -----------------------------------------------------------------------------------------
 
-        self.target_agent_transformer = Temporal_Encoder(feature_size=args['target_agent_feat_size'], hidden_size=args['target_agent_enc_size'], encoder_head=8)
+        self.target_agent_transformer = Temporal_Encoder(feature_size=args['target_agent_feat_size'], hidden_size=args['target_agent_enc_size'], encoder_head=1)
         self.target_agent_seq_encoder = nn.LSTM(input_size=args['target_agent_enc_size'],
                                                     hidden_size=args['target_agent_enc_size'],
                                                     num_layers=1,
@@ -45,7 +45,7 @@ class STEncoder(PredictionEncoder):
         # -----------------------------------------------------------------------------------------
         # Surrounding agent encoding
         self.nbr_emb = nn.Linear(args['nbr_feat_size'] + 1, args['nbr_emb_size'])
-        self.nbr_agent_temporal_encoder_layer = TransformerEncoderLayer(d_model=(args['nbr_feat_size'] + 1), nhead=6)
+        self.nbr_agent_temporal_encoder_layer = TransformerEncoderLayer(d_model=(args['nbr_feat_size'] + 1), nhead=1)
         self.nbr_agent_temporal_encoder = TransformerEncoder(self.nbr_agent_temporal_encoder_layer, 2)
         self.dropout_nbr = nn.Dropout(dropout)
         self.nbr_emb_enc = nn.Linear((args['nbr_feat_size'] + 1), args['nbr_enc_size'])
@@ -131,6 +131,7 @@ class STEncoder(PredictionEncoder):
         """
 
         target_agent_feats = inputs['target_agent_representation']
+        print(target_agent_feats.shape)
         target_agent_enc = self.target_agent_transformer(target_agent_feats)
         _, (target_agent_enc, _) = self.target_agent_seq_encoder(target_agent_enc)  #[N, D], [N, D]
         target_agent_enc = target_agent_enc.squeeze(0)
@@ -138,23 +139,23 @@ class STEncoder(PredictionEncoder):
         #---------------------------------------------------------------------------------------
         # Encode surrounding agents
         
-        # nbr_vehicle_feats = inputs['surrounding_agent_representation']['vehicles']
-        # nbr_vehicle_feats = torch.cat((nbr_vehicle_feats, torch.zeros_like(nbr_vehicle_feats[:, :, :, 0:1])), dim=-1)
-        # nbr_vehicle_masks = inputs['surrounding_agent_representation']['vehicle_masks']
-        # nbr_vehicle_enc = self.variable_size_transform_encode_preserve(nbr_vehicle_feats, nbr_vehicle_masks, self.nbr_agent_temporal_encoder)
-        # nbr_vehicle_enc = self.dropout_nbr(self.leaky_relu(self.nbr_emb_enc(nbr_vehicle_enc)))
+        nbr_vehicle_feats = inputs['surrounding_agent_representation']['vehicles']
+        nbr_vehicle_feats = torch.cat((nbr_vehicle_feats, torch.zeros_like(nbr_vehicle_feats[:, :, :, 0:1])), dim=-1)
+        nbr_vehicle_masks = inputs['surrounding_agent_representation']['vehicle_masks']
+        nbr_vehicle_enc = self.variable_size_transform_encode_preserve(nbr_vehicle_feats, nbr_vehicle_masks, self.nbr_agent_temporal_encoder)
+        nbr_vehicle_enc = self.dropout_nbr(self.leaky_relu(self.nbr_emb_enc(nbr_vehicle_enc)))
 
 
-        # nbr_ped_feats = inputs['surrounding_agent_representation']['pedestrians']
-        # nbr_ped_feats = torch.cat((nbr_ped_feats, torch.ones_like(nbr_ped_feats[:, :, :, 0:1])), dim=-1)
-        # nbr_ped_masks = inputs['surrounding_agent_representation']['pedestrian_masks']
-        # nbr_pedestrian_enc = self.variable_size_transform_encode_preserve(nbr_ped_feats, nbr_ped_masks, self.nbr_agent_temporal_encoder)
-        # nbr_pedestrian_enc = self.dropout_nbr(self.leaky_relu(self.nbr_emb_enc(nbr_pedestrian_enc)))
+        nbr_ped_feats = inputs['surrounding_agent_representation']['pedestrians']
+        nbr_ped_feats = torch.cat((nbr_ped_feats, torch.ones_like(nbr_ped_feats[:, :, :, 0:1])), dim=-1)
+        nbr_ped_masks = inputs['surrounding_agent_representation']['pedestrian_masks']
+        nbr_pedestrian_enc = self.variable_size_transform_encode_preserve(nbr_ped_feats, nbr_ped_masks, self.nbr_agent_temporal_encoder)
+        nbr_pedestrian_enc = self.dropout_nbr(self.leaky_relu(self.nbr_emb_enc(nbr_pedestrian_enc)))
 
-        # nbr_vehicle_enc = self.variable_size_lstm_encode(nbr_vehicle_enc, nbr_vehicle_masks, self.nbr_agent_seq_encoder)
-        # nbr_ped_enc = self.variable_size_lstm_encode(nbr_pedestrian_enc, nbr_ped_masks, self.nbr_agent_seq_encoder)
-        # # Agent-node attention
-        # nbr_encodings = torch.cat((nbr_vehicle_enc, nbr_ped_enc), dim=1)
+        nbr_vehicle_enc = self.variable_size_lstm_encode(nbr_vehicle_enc, nbr_vehicle_masks, self.nbr_agent_seq_encoder)
+        nbr_ped_enc = self.variable_size_lstm_encode(nbr_pedestrian_enc, nbr_ped_masks, self.nbr_agent_seq_encoder)
+        # Agent-node attention
+        nbr_encodings = torch.cat((nbr_vehicle_enc, nbr_ped_enc), dim=1)
 
 
         #---------------------------------------------------------------------------------------
@@ -203,15 +204,13 @@ class STEncoder(PredictionEncoder):
         lane_node_masks = ~lane_node_masks
         lane_node_masks = lane_node_masks.float()
 
+
+        target_agent_enc = target_agent_enc.unsqueeze(0)
+
         # Return encodings
         encodings = {'target_agent_encoding': target_agent_enc,
-                     'context_encoding': {'combined': lane_node_enc,
-                                          'combined_masks': lane_node_masks,
-                                          'map': None,
-                                          'pedestrians': None,
-                                          'map_masks': None,
-                                          'pedestrian_masks': None
-                                          },
+                     'surrounding_agent_encoding': nbr_encodings,
+                     'context_encoding':lane_node_enc,
                      }
 
         # Pass on initial nodes and edge structure to aggregator if included in inputs

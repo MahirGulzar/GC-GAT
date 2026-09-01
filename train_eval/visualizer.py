@@ -61,7 +61,7 @@ class Visualizer:
         if not os.path.isdir(os.path.join(output_dir, 'results', 'gifs')):
             os.mkdir(os.path.join(output_dir, 'results', 'gifs'))
         for n, indices in enumerate(index_list):
-            imgs = self.generate_nuscenes_gif(indices)
+            imgs = self.generate_nuscenes_gif(indices, n)
             filename = os.path.join(output_dir, 'results', 'gifs', 'example' + str(n) + '.gif')
             imageio.mimsave(filename, imgs, format='GIF', duration=500)
 
@@ -89,7 +89,7 @@ class Visualizer:
 
         return idcs
 
-    def generate_nuscenes_gif(self, idcs: List[int]):
+    def generate_nuscenes_gif(self, idcs: List[int], index: int):
         """
         Generates gif of predictions for the given set of indices.
         :param idcs: val set indices corresponding to a particular instance token.
@@ -114,6 +114,9 @@ class Visualizer:
 
         raster_maps = InputRepresentation(static_layer_rasterizer, agent_rasterizer, Rasterizer())
 
+        # create directory
+        if not os.path.isdir('/home/mahir/git_repos/qualitative_results/'+str(index)):
+            os.makedirs('/home/mahir/git_repos/qualitative_results/'+str(index))
         imgs = []
         for idx in idcs:
 
@@ -137,32 +140,41 @@ class Visualizer:
             predictions = self.model(data['inputs'])
 
             # Plot
-            fig, ax = plt.subplots(1, 3, figsize=(15, 5))
+            fig, ax = plt.subplots(1, 2, figsize=(15, 5))
             ax[0].imshow(hd_map, extent=self.ds.map_extent)
             ax[1].imshow(hd_map_gray, cmap='gist_gray', extent=self.ds.map_extent)
-            ax[2].imshow(hd_map_gray, cmap='gist_gray', extent=self.ds.map_extent)
+            # ax[2].imshow(hd_map_gray, cmap='gist_gray', extent=self.ds.map_extent)
 
+            traj_gt = data['ground_truth']['traj'][0]
             for n, traj in enumerate(predictions['traj'][0]):
                 ax[1].plot(traj[:, 0].detach().cpu().numpy(), traj[:, 1].detach().cpu().numpy(), lw=4,
                            color='r', alpha=0.8)
                 ax[1].scatter(traj[-1, 0].detach().cpu().numpy(), traj[-1, 1].detach().cpu().numpy(), 60,
                               color='r', alpha=0.8)
+                
+                ax[1].plot(traj_gt[:, 0].detach().cpu().numpy(), traj_gt[:, 1].detach().cpu().numpy(), lw=4, color='g')
+                ax[1].scatter(traj_gt[-1, 0].detach().cpu().numpy(), traj_gt[-1, 1].detach().cpu().numpy(), 60, color='g')
 
-            traj_gt = data['ground_truth']['traj'][0]
-            ax[2].plot(traj_gt[:, 0].detach().cpu().numpy(), traj_gt[:, 1].detach().cpu().numpy(), lw=4, color='g')
-            ax[2].scatter(traj_gt[-1, 0].detach().cpu().numpy(), traj_gt[-1, 1].detach().cpu().numpy(), 60, color='g')
+            
+            # ax[2].plot(traj_gt[:, 0].detach().cpu().numpy(), traj_gt[:, 1].detach().cpu().numpy(), lw=4, color='g')
+            # ax[2].scatter(traj_gt[-1, 0].detach().cpu().numpy(), traj_gt[-1, 1].detach().cpu().numpy(), 60, color='g')
 
             ax[0].axis('off')
             ax[1].axis('off')
-            ax[2].axis('off')
+            # ax[2].axis('off')
             fig.tight_layout(pad=0)
             ax[0].margins(0)
             ax[1].margins(0)
-            ax[2].margins(0)
+            # ax[2].margins(0)
 
             fig.canvas.draw()
+
+            fig.savefig('/home/mahir/git_repos/qualitative_results/'+str(index)+'/'+str(idx)+'_a.png', bbox_inches=ax[0].get_window_extent().transformed(fig.dpi_scale_trans.inverted()))
+            fig.savefig('/home/mahir/git_repos/qualitative_results/'+str(index)+'/'+str(idx)+'_b.png', bbox_inches=ax[1].get_window_extent().transformed(fig.dpi_scale_trans.inverted()))
+            # fig.savefig('/mnt/data/subplot1.png', bbox_inches=ax[1].get_window_extent().transformed(fig.dpi_scale_trans.inverted()))
+            # fig.savefig('/mnt/data/subplot2.png', bbox_inches=ax[2].get_window_extent().transformed(fig.dpi_scale_trans.inverted()))
             image_from_plot = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
-            image_from_plot = image_from_plot.reshape(fig.canvas.get_width_height()[::-1] + (3,))
+            image_from_plot = image_from_plot.reshape(fig.canvas.get_width_height()[::-1])
             imgs.append(image_from_plot)
             plt.close(fig)
 

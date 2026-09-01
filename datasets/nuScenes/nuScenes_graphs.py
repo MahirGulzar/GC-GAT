@@ -6,6 +6,7 @@ from nuscenes.prediction import PredictHelper
 import numpy as np
 from typing import Dict, Tuple, Union, List
 from scipy.spatial.distance import cdist
+from shapely.geometry import Polygon, Point
 
 
 class NuScenesGraphs(NuScenesVector):
@@ -33,11 +34,15 @@ class NuScenesGraphs(NuScenesVector):
         """
         Function to compute statistics for a given data point
         """
-        num_lane_nodes, max_nbr_nodes = self.get_map_representation(idx)
+        num_lane_nodes, max_nbr_nodes, num_intersections, num_stoplines, num_ped_crossings = self.get_map_representation(idx)
         num_vehicles, num_pedestrians = self.get_surrounding_agent_representation(idx)
         stats = {
             'num_lane_nodes': num_lane_nodes,
             'max_nbr_nodes': max_nbr_nodes,
+            'num_intersections': num_intersections,
+            'num_stoplines': num_stoplines,
+            'num_ped_crossings': num_ped_crossings,
+            # 'num_walkway': num_walkway,
             'num_vehicles': num_vehicles,
             'num_pedestrians': num_pedestrians
         }
@@ -58,12 +63,34 @@ class NuScenesGraphs(NuScenesVector):
         inputs['init_node'] = init_node
         inputs['node_seq_gt'] = node_seq_gt  # For pretraining with ground truth node sequence
         data = {'inputs': inputs, 'ground_truth': ground_truth}
+
+        # self.visualize_graph(inputs['map_representation']['lane_node_feats'], \
+        #                         inputs['map_representation']['intersection_feats'], \
+        #                         inputs['map_representation']['stopline_feats'], \
+        #                         inputs['map_representation']['ped_crossing_feats'], \
+        #                         inputs['map_representation']['walk_way_feats'], \
+        #                         inputs['map_representation']['s_next'], \
+        #                         inputs['map_representation']['edge_type'], \
+        #                         ground_truth['evf_gt'], \
+        #                         node_seq_gt, \
+        #                         ground_truth['traj'])
+        # time.sleep(10)
         self.save_data(idx, data)
 
     def get_inputs(self, idx: int) -> Dict:
         inputs = super().get_inputs(idx)
         a_n_masks = self.get_agent_node_masks(inputs['map_representation'], inputs['surrounding_agent_representation'])
+        a_cross_walk_masks = self.get_agent_cross_walk_masks(inputs['map_representation'], inputs['surrounding_agent_representation'])
+        v_intersection_masks = self.get_vehicle_intersection_masks(inputs['map_representation'], inputs['surrounding_agent_representation'])
+        v_stopline_masks = self.get_vehicle_stopline_masks(inputs['map_representation'], inputs['surrounding_agent_representation'])
+        mp_n_masks = self.get_map_elements_node_masks(inputs['map_representation'])
+
         inputs['agent_node_masks'] = a_n_masks
+        inputs['agent_cross_walk_masks'] = a_cross_walk_masks
+        inputs['vehicle_intersection_masks'] = v_intersection_masks
+        inputs['vehicle_stopline_masks'] = v_stopline_masks
+        inputs['map_elements_node_masks'] = mp_n_masks
+
         return inputs
 
     def get_ground_truth(self, idx: int) -> Dict:
@@ -88,50 +115,198 @@ class NuScenesGraphs(NuScenesVector):
         lanes = self.get_lanes_around_agent(global_pose, map_api)
 
         # Get relevant polygon layers from the map_api
-        polygons = self.get_polygons_around_agent(global_pose, map_api)
+        polygons = self.get_polygons_around_agent(global_pose, map_api, ['stop_line', 'ped_crossing'])
 
-        # Get vectorized representation of lanes
-        lane_node_feats, lane_ids = self.get_lane_node_feats(global_pose, lanes, polygons)
+        # walk_way_polygons = self.get_polygons_around_agent(global_pose, map_api, ['walkway'])
+        road_segment_polygons = self.get_polygons_around_agent(global_pose, map_api, ['road_segment'])
+        
+        intersection_polygons = []
+        intersection_vectors = []
+        max_vertices = 0
+        for poly in road_segment_polygons['road_segment']:
+            if map_api.get('road_segment', list(poly.keys())[0])['is_intersection'] is True:
+                intersection_polygons.append(poly)
+
+                shapely_polygon = list(poly.values())[0]
+                vertices_array = np.array(shapely_polygon.exterior.coords)
+                
+                # Reduce the number of vertices for road_segments, after this they usually don't go above 40
+                if len(vertices_array) > 30:
+                    threshold = (len(vertices_array) // 30) * 0.2
+                    shapely_polygon = shapely_polygon.simplify(threshold, preserve_topology=False)
+                    vertices_array = np.array(shapely_polygon.exterior.coords)
+
+                # Translate the vertices to local co-ordinates
+                for i in range(len(vertices_array)):
+                    vertex = (vertices_array[i][0], vertices_array[i][1], 0)
+                    local_vertex = self.global_to_local(global_pose, vertex)
+                    vertices_array[i][0] = local_vertex[0]
+                    vertices_array[i][1] = local_vertex[1]
+
+                max_vertices = max(max_vertices, len(vertices_array))
+                if max_vertices > 40:
+                    print("road_segment max_vertices: ", max_vertices)
+                intersection_vectors.append(vertices_array)
+
+        num_intersections = len(intersection_vectors)
+        road_segment_polygons['road_segment'] = intersection_polygons
+        
+
+        # ---------------------------------------------------------------------------------
+
+        stopline_vectors = []
+        vertices_array = []
+        max_vertices = 0
+        for poly in polygons['stop_line']:
+            shapely_polygon = list(poly.values())[0]
+            vertices_array = np.array(shapely_polygon.exterior.coords)
+
+            # Translate the vertices to local co-ordinates
+            for i in range(len(vertices_array)):
+                vertex = (vertices_array[i][0], vertices_array[i][1], 0)
+                local_vertex = self.global_to_local(global_pose, vertex)
+                vertices_array[i][0] = local_vertex[0]
+                vertices_array[i][1] = local_vertex[1]
+            
+            max_vertices = max(max_vertices, len(vertices_array))
+            if max_vertices > 15:
+                print("stopline max_vertices: ", max_vertices)
+            stopline_vectors.append(vertices_array)
+
+        num_stoplines = len(stopline_vectors)
+
+
+        # ---------------------------------------------------------------------------------
+
+        ped_crossing_vectors = []
+        vertices_array = []
+        max_vertices = 0
+        for poly in polygons['ped_crossing']:
+            shapely_polygon = list(poly.values())[0]
+            vertices_array = np.array(shapely_polygon.exterior.coords)
+
+            # Translate the vertices to local co-ordinates
+            for i in range(len(vertices_array)):
+                vertex = (vertices_array[i][0], vertices_array[i][1], 0)
+                local_vertex = self.global_to_local(global_pose, vertex)
+                vertices_array[i][0] = local_vertex[0]
+                vertices_array[i][1] = local_vertex[1]
+            
+            max_vertices = max(max_vertices, len(vertices_array))
+            if max_vertices > 10:
+                print("ped_crossing max_vertices: ", max_vertices)
+            ped_crossing_vectors.append(vertices_array)
+
+        num_ped_crossing = len(ped_crossing_vectors)
+
+
+        # ---------------------------------------------------------------------------------
+
+
+        # walk_way_vectors = []
+        # vertices_array = []
+        # max_vertices = 0
+        # for poly in walk_way_polygons['walkway']:
+        #     shapely_polygon = list(poly.values())[0]
+        #     vertices_array = np.array(shapely_polygon.exterior.coords)
+
+        #     # Reduce the number of vertices for road_segments, after this they usually don't go above 40
+        #     if len(vertices_array) > 30:
+        #         threshold = (len(vertices_array) // 30) * 0.2
+        #         shapely_polygon = shapely_polygon.simplify(threshold, preserve_topology=False)
+        #         vertices_array = np.array(shapely_polygon.exterior.coords)
+
+        #     # Translate the vertices to local co-ordinates
+        #     for i in range(len(vertices_array)):
+        #         vertex = (vertices_array[i][0], vertices_array[i][1], 0)
+        #         local_vertex = self.global_to_local(global_pose, vertex)
+        #         vertices_array[i][0] = local_vertex[0]
+        #         vertices_array[i][1] = local_vertex[1]
+            
+        #     max_vertices = max(max_vertices, len(vertices_array))
+        #     if max_vertices > 80:
+        #         print("walk_way max_vertices: ", max_vertices)
+        #     walk_way_vectors.append(vertices_array)
+
+        # num_walkway = len(walk_way_vectors)
+
+        intersection_vectors = self.discard_poses_outside_extent(intersection_vectors)
+        stopline_vectors = self.discard_poses_outside_extent(stopline_vectors)
+        ped_crossing_vectors = self.discard_poses_outside_extent(ped_crossing_vectors)
+        # walk_way_vectors = self.discard_poses_outside_extent(walk_way_vectors)
+
+        # Get vectorized represlane_idsentation of lanes
+        lane_node_feats, lane_ids = self.get_lane_node_feats(global_pose, lanes, polygons, map_api)
 
         # Discard lanes outside map extent
         lane_node_feats, lane_ids = self.discard_poses_outside_extent(lane_node_feats, lane_ids)
 
         # Get edges:
         e_succ = self.get_successor_edges(lane_ids, map_api)
-        e_prox = self.get_proximal_edges(lane_node_feats, e_succ)
+        # e_prox = self.get_proximal_edges(lane_node_feats, e_succ)
 
         # Concatentate flag indicating whether a node hassss successors to lane node feats
         lane_node_feats = self.add_boundary_flag(e_succ, lane_node_feats)
 
         # Add dummy node (0, 0, 0, 0, 0, 0) if no lane nodes are found
         if len(lane_node_feats) == 0:
-            lane_node_feats = [np.zeros((1, 6))]
+            lane_node_feats = [np.zeros((1, 8))]
             e_succ = [[]]
-            e_prox = [[]]
+            # e_prox = [[]]
 
         # While running the dataset class in 'compute_stats' mode:
         if self.mode == 'compute_stats':
 
-            num_nbrs = [len(e_succ[i]) + len(e_prox[i]) for i in range(len(e_succ))]
+            num_nbrs = [len(e_succ[i]) for i in range(len(e_succ))]
             max_nbrs = max(num_nbrs) if len(num_nbrs) > 0 else 0
             num_nodes = len(lane_node_feats)
 
-            return num_nodes, max_nbrs
+            return num_nodes, max_nbrs, num_intersections, num_stoplines, num_ped_crossing
 
         # Get edge lookup tables
-        s_next, edge_type = self.get_edge_lookup(e_succ, e_prox)
+        s_next, edge_type = self.get_edge_lookup(e_succ)
 
         # Convert list of lane node feats to fixed size numpy array and masks
-        lane_node_feats, lane_node_masks = self.list_to_tensor(lane_node_feats, self.max_nodes, self.polyline_length, 6)
+        lane_node_feats, lane_node_masks = self.list_to_tensor(lane_node_feats, self.max_nodes, self.polyline_length, 8)
+
+
+        intersection_feats, intersection_masks = self.list_to_tensor(intersection_vectors, self.max_intersections, 40, 2)
+        stopline_feats, stopline_masks = self.list_to_tensor(stopline_vectors, self.max_stoplines, 15, 2)
+        ped_crossing_feats, ped_crossing_masks = self.list_to_tensor(ped_crossing_vectors, self.max_ped_crossings, 10, 2)
+        # walk_way_feats, walk_way_masks = self.list_to_tensor(walk_way_vectors, self.max_walkway, 80, 2)
 
         map_representation = {
             'lane_node_feats': lane_node_feats,
             'lane_node_masks': lane_node_masks,
+            'intersection_feats': intersection_feats,
+            'intersection_masks': intersection_masks,
+            'stopline_feats': stopline_feats,
+            'stopline_masks': stopline_masks,
+            'ped_crossing_feats': ped_crossing_feats,
+            'ped_crossing_masks': ped_crossing_masks,
             's_next': s_next,
             'edge_type': edge_type
         }
 
         return map_representation
+    
+    @staticmethod
+    def global_to_local_point(origin: Tuple, global_pose: Tuple) -> Tuple:
+        """
+        Converts pose in global co-ordinates to local co-ordinates.
+        :param origin: (x, y) of origin in global co-ordinates
+        :param global_pose: (x, y) in global co-ordinates
+        :return local_pose: (x, y) in local co-ordinates
+        """
+        # Unpack
+        global_x, global_y, _ = global_pose
+        origin_x, origin_y = origin
+
+        # Translate
+        local_x = global_x - origin_x
+        local_y = global_y - origin_y
+
+        return (local_x, local_y)
 
     @staticmethod
     def get_successor_edges(lane_ids: List[str], map_api: NuScenesMap) -> List[List[int]]:
@@ -191,7 +366,7 @@ class NuScenesGraphs(NuScenesVector):
 
         return lane_node_feats
 
-    def get_edge_lookup(self, e_succ: List[List[int]], e_prox: List[List[int]]):
+    def get_edge_lookup(self, e_succ: List[List[int]]):
         """
         Returns edge look up tables
         :param e_succ: Lists of successor edges for each node
@@ -203,7 +378,7 @@ class NuScenesGraphs(NuScenesVector):
         state at that node. shape: [max_nodes, max_nbr_nodes + 1]. Last
 
         edge_type: Look-up table of the same shape as s_next containing integer values for edge types.
-        {0: No edge exists, 1: successor edge, 2: proximal edge, 3: terminal edge}
+        {0: No edge exists, 1: successor edge, 2: terminal edge}
         """
 
         s_next = np.zeros((self.max_nodes, self.max_nbr_nodes + 1))
@@ -212,7 +387,7 @@ class NuScenesGraphs(NuScenesVector):
         for src_node in range(len(e_succ)):
             nbr_idx = 0
             successors = e_succ[src_node]
-            prox_nodes = e_prox[src_node]
+            # prox_nodes = e_prox[src_node]
 
             # Populate successor edges
             for successor in successors:
@@ -221,14 +396,14 @@ class NuScenesGraphs(NuScenesVector):
                 nbr_idx += 1
 
             # Populate proximal edges
-            for prox_node in prox_nodes:
-                s_next[src_node, nbr_idx] = prox_node
-                edge_type[src_node, nbr_idx] = 2
-                nbr_idx += 1
+            # for prox_node in prox_nodes:
+            #     s_next[src_node, nbr_idx] = prox_node
+            #     edge_type[src_node, nbr_idx] = 2
+            #     nbr_idx += 1
 
             # Populate terminal edge
             s_next[src_node, -1] = src_node + self.max_nodes
-            edge_type[src_node, -1] = 3
+            edge_type[src_node, -1] = 2
 
         return s_next, edge_type
 
@@ -407,15 +582,204 @@ class NuScenesGraphs(NuScenesVector):
                         if dist <= dist_thresh:
                             ped_node_masks[i, j] = 0
 
+        # 1 where dynamic obstacle (vehicle or pedestrian) is not present at lane node
+        # 0 where dynamic obstacle is at proximity of lane node.
+
         agent_node_masks = {'vehicles': vehicle_node_masks, 'pedestrians': ped_node_masks}
         return agent_node_masks
 
-    def visualize_graph(self, node_feats, s_next, edge_type, evf_gt, node_seq, fut_xy):
+    @staticmethod
+    def get_agent_cross_walk_masks(hd_map: Dict, agents: Dict, dist_thresh=10) -> Dict:
+        """
+        Returns key/val masks for agent-node attention layers. All agents except those within a distance threshold of
+        of the crosswalks or inside the crosswalk Polygon.
+        """
+
+        ped_crossing_feats = hd_map['ped_crossing_feats']
+        ped_crossing_masks = hd_map['ped_crossing_masks']
+        vehicle_feats = agents['vehicles']
+        vehicle_masks = agents['vehicle_masks']
+        ped_feats = agents['pedestrians']
+        ped_masks = agents['pedestrian_masks']
+
+        vehicle_node_masks = np.ones((len(ped_crossing_feats), len(vehicle_feats)))
+        ped_node_masks = np.ones((len(ped_crossing_feats), len(ped_feats)))
+
+        for i, node_feat in enumerate(ped_crossing_feats):
+            if (ped_crossing_masks[i] == 0).any():
+                node_pose_idcs = np.where(ped_crossing_masks[i][:, 0] == 0)[0]
+                node_locs = node_feat[node_pose_idcs, :2]
+
+                for j, vehicle_feat in enumerate(vehicle_feats):
+                    if (vehicle_masks[j] == 0).any():
+                        vehicle_loc = vehicle_feat[-1, :2]
+                        dist = np.min(np.linalg.norm(node_locs - vehicle_loc, axis=1))
+                        if dist <= dist_thresh:
+                            vehicle_node_masks[i, j] = 0
+                        elif Polygon(node_locs).contains(Point(vehicle_loc[0], vehicle_loc[1])):
+                            vehicle_node_masks[i, j] = 0
+
+                for j, ped_feat in enumerate(ped_feats):
+                    if (ped_masks[j] == 0).any():
+                        ped_loc = ped_feat[-1, :2]
+                        dist = np.min(np.linalg.norm(node_locs - ped_loc, axis=1))
+                        if dist <= dist_thresh:
+                            ped_node_masks[i, j] = 0
+                        elif Polygon(node_locs).contains(Point(ped_loc[0], ped_loc[1])):
+                            ped_node_masks[i, j] = 0
+
+        # 1 where dynamic obstacle (vehicle or pedestrian) is not present at or inside crosswalk
+        # 0 where dynamic obstacle is at proximity of crosswalk.
+
+        agent_cross_walk_masks = {'vehicles': vehicle_node_masks, 'pedestrians': ped_node_masks}
+        return agent_cross_walk_masks
+    
+    @staticmethod
+    def get_vehicle_intersection_masks(hd_map: Dict, agents: Dict, dist_thresh=10) -> Dict:
+        """
+        Returns key/val masks for agent-node attention layers. All vehicles except those within a distance threshold of
+        of the intersection or inside the intersection Polygon.
+        """
+
+        intersection_feats = hd_map['intersection_feats']
+        intersection_masks = hd_map['intersection_masks']
+        vehicle_feats = agents['vehicles']
+        vehicle_masks = agents['vehicle_masks']
+
+        vehicle_node_masks = np.ones((len(intersection_feats), len(vehicle_feats)))
+
+        for i, node_feat in enumerate(intersection_feats):
+            if (intersection_masks[i] == 0).any():
+                node_pose_idcs = np.where(intersection_masks[i][:, 0] == 0)[0]
+                node_locs = node_feat[node_pose_idcs, :2]
+
+                for j, vehicle_feat in enumerate(vehicle_feats):
+                    if (vehicle_masks[j] == 0).any():
+                        vehicle_loc = vehicle_feat[-1, :2]
+                        dist = np.min(np.linalg.norm(node_locs - vehicle_loc, axis=1))
+                        if dist <= dist_thresh:
+                            vehicle_node_masks[i, j] = 0
+                        elif Polygon(node_locs).contains(Point(vehicle_loc[0], vehicle_loc[1])):
+                            vehicle_node_masks[i, j] = 0
+
+        # 1 where dynamic obstacle (vehicle) is not present near or inside the intersection
+        # 0 where dynamic obstacle is at proximity of intersection.
+
+        vehicle_intersection_masks = {'vehicles': vehicle_node_masks}
+        return vehicle_intersection_masks
+    
+    @staticmethod
+    def get_vehicle_stopline_masks(hd_map: Dict, agents: Dict, dist_thresh=10) -> Dict:
+        """
+        Returns key/val masks for agent-node attention layers. All vehicles except those within a distance threshold of
+        of the intersection or inside the intersection Polygon.
+        """
+
+        stopline_feats = hd_map['stopline_feats']
+        stopline_masks = hd_map['stopline_masks']
+        vehicle_feats = agents['vehicles']
+        vehicle_masks = agents['vehicle_masks']
+
+        vehicle_node_masks = np.ones((len(stopline_feats), len(vehicle_feats)))
+
+        for i, node_feat in enumerate(stopline_feats):
+            if (stopline_masks[i] == 0).any():
+                node_pose_idcs = np.where(stopline_masks[i][:, 0] == 0)[0]
+                node_locs = node_feat[node_pose_idcs, :2]
+
+                for j, vehicle_feat in enumerate(vehicle_feats):
+                    if (vehicle_masks[j] == 0).any():
+                        vehicle_loc = vehicle_feat[-1, :2]
+                        dist = np.min(np.linalg.norm(node_locs - vehicle_loc, axis=1))
+                        if dist <= dist_thresh:
+                            vehicle_node_masks[i, j] = 0
+                        elif Polygon(node_locs).contains(Point(vehicle_loc[0], vehicle_loc[1])):
+                            vehicle_node_masks[i, j] = 0
+
+        # 1 where dynamic obstacle (vehicle) is not present near or inside the stopline
+        # 0 where dynamic obstacle is at proximity of stopline.
+
+        vehicle_stopline_masks = {'vehicles': vehicle_node_masks}
+        return vehicle_stopline_masks
+
+    @staticmethod
+    def get_map_elements_node_masks(hd_map: Dict, dist_thresh=10) -> Dict:
+        """
+        Returns key/val masks for agent-node attention layers. All agents except those within a distance threshold of
+        the lane node are masked. The idea is to incorporate local agent context at each lane node.
+        """
+
+        lane_node_feats = hd_map['lane_node_feats']
+        lane_node_masks = hd_map['lane_node_masks']
+        intersection_feats = hd_map['intersection_feats']
+        intersection_masks = hd_map['intersection_masks']
+        ped_crossing_feats = hd_map['ped_crossing_feats']
+        ped_crossing_masks = hd_map['ped_crossing_masks']
+        stopline_feats = hd_map['stopline_feats']
+        stopline_masks = hd_map['stopline_masks']
+
+        intersection_node_masks = np.ones((len(lane_node_feats), len(intersection_feats)))
+        ped_crossing_node_masks = np.ones((len(lane_node_feats), len(ped_crossing_feats)))
+        stopline_node_masks = np.ones((len(lane_node_feats), len(stopline_feats)))
+
+        for i, node_feat in enumerate(lane_node_feats):
+            if (lane_node_masks[i] == 0).any():
+                node_pose_idcs = np.where(lane_node_masks[i][:, 0] == 0)[0]
+                node_locs = node_feat[node_pose_idcs, :2]
+
+                for j, intersection_feat in enumerate(intersection_feats):
+                    if (intersection_masks[j] == 0).any():
+                        # # If any of the intersection vertices are within dist_thresh of the lane node, mask the node
+                        # for k in range(len(intersection_feat)):
+                        #     vertex = intersection_feat[k, :2]
+                        #     dist = np.min(np.linalg.norm(node_locs - vertex, axis=1))
+                        #     if dist <= dist_thresh:
+                        #         intersection_node_masks[i, j] = 0
+                        # If any of the lane node is within the intersection Polygon, mask the node                   
+                        for k in range(len(node_locs)):
+                            if Polygon(intersection_feat).contains(Point(node_locs[k, 0], node_locs[k, 1])):
+                                intersection_node_masks[i, j] = 0
+
+                for j, ped_crossing_feat in enumerate(ped_crossing_feats):
+                    if (ped_crossing_masks[j] == 0).any():
+                        # # If any of the ped_crossing vertices are within dist_thresh of the lane node, mask the node
+                        # for k in range(len(ped_crossing_feat)):
+                        #     vertex = ped_crossing_feat[k, :2]
+                        #     dist = np.min(np.linalg.norm(node_locs - vertex, axis=1))
+                        #     if dist <= dist_thresh:
+                        #         ped_crossing_node_masks[i, j] = 0
+                        # If any of the lane node is within the ped_crossing Polygon, mask the node                   
+                        for k in range(len(node_locs)):
+                            if Polygon(ped_crossing_feat).contains(Point(node_locs[k, 0], node_locs[k, 1])):
+                                ped_crossing_node_masks[i, j] = 0
+                
+                for j, stopline_feat in enumerate(stopline_feats):
+                    if (stopline_masks[j] == 0).any():
+                        # # If any of the stopline vertices are within dist_thresh of the lane node, mask the node
+                        # for k in range(len(stopline_feat)):
+                        #     vertex = stopline_feat[k, :2]
+                        #     dist = np.min(np.linalg.norm(node_locs - vertex, axis=1))
+                        #     if dist <= dist_thresh:
+                        #         stopline_node_masks[i, j] = 0
+                        # If any of the lane node is within the stopline Polygon, mask the node                   
+                        for k in range(len(node_locs)):
+                            if Polygon(stopline_feat).contains(Point(node_locs[k, 0], node_locs[k, 1])):
+                                stopline_node_masks[i, j] = 0
+
+        # 1 where map_element is not present at lane node
+        # 0 where map_element is at proximity of lane node or inside the polygon.
+
+        map_elements_node_masks = {'intersections': intersection_node_masks, 'ped_crossing': ped_crossing_node_masks, 'stopline': stopline_node_masks}
+        return map_elements_node_masks
+
+    def visualize_graph(self, node_feats, s_next, edge_type, evf_gt, node_seq, fut_xy, map_mask_drivable):
         """
         Function to visualize lane graph.
         """
         fig, ax = plt.subplots()
         ax.imshow(np.zeros((3, 3)), extent=self.map_extent, cmap='gist_gray')
+
+        from matplotlib.patches import Polygon
 
         # Plot edges
         for src_id, src_feats in enumerate(node_feats):
@@ -428,7 +792,7 @@ class NuScenesGraphs(NuScenesVector):
                 for idx, dest_id in enumerate(s_next[src_id]):
                     edge_t = edge_type[src_id, idx]
                     visited = evf_gt[src_id, idx]
-                    if 3 > edge_t > 0:
+                    if 2 > edge_t > 0:
 
                         dest_feats = node_feats[int(dest_id)]
                         feat_len_dest = np.sum(np.sum(np.absolute(dest_feats), axis=1) != 0)
@@ -458,6 +822,44 @@ class NuScenesGraphs(NuScenesVector):
                 s = 200 if visited else 50
                 ax.scatter(x, y, s, c=c)
 
+
+         # import time
+        
+
+        # Visualize the drivable area mask
+        plt.imshow(map_mask_drivable, extent=[self.map_extent[0], self.map_extent[1], -50, 50], cmap='gray')
+        # plt.title('Drivable Area Mask')
+        # plt.show()
+
+        # time.sleep(3)
+
+        # background_color = 'white'
+        # ax.add_patch(map_mask_drivable)
+
         plt.plot(fut_xy[:, 0], fut_xy[:, 1], color='r', lw=3)
+
+        # for intersection_feat in intersection_feats:
+        #     filtered_features = intersection_feat[~np.all(intersection_feat == 0, axis=1)]
+        #     if len(filtered_features) > 0:
+        #         polygon = Polygon(filtered_features, fill=False, edgecolor='g', linewidth=2)
+        #         ax.add_patch(polygon)
+        
+        # for stopline_feat in stopline_feats:
+        #     filtered_features = stopline_feat[~np.all(stopline_feat == 0, axis=1)]
+        #     if len(filtered_features) > 0:
+        #         polygon = Polygon(filtered_features, fill=False, edgecolor='b', linewidth=2)
+        #         ax.add_patch(polygon)
+        
+        # for ped_crossing_feat in ped_crossing_feats:
+        #     filtered_features = ped_crossing_feat[~np.all(ped_crossing_feat == 0, axis=1)]
+        #     if len(filtered_features) > 0:
+        #         polygon = Polygon(filtered_features, fill=True, edgecolor='r', linewidth=2)
+        #         ax.add_patch(polygon)
+
+        # for walk_way_feat in walk_way_feats:
+        #     filtered_features = walk_way_feat[~np.all(walk_way_feat == 0, axis=1)]
+        #     if len(filtered_features) > 0:
+        #         polygon = Polygon(filtered_features, fill=True, edgecolor='r', linewidth=2)
+        #         ax.add_patch(polygon)
 
         plt.show()
