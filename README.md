@@ -1,5 +1,3 @@
-[![PWC](https://img.shields.io/endpoint.svg?url=https://paperswithcode.com/badge/multimodal-trajectory-prediction-conditioned/trajectory-prediction-on-nuscenes)](https://paperswithcode.com/sota/trajectory-prediction-on-nuscenes?p=multimodal-trajectory-prediction-conditioned)
-
 # Gc-Gat: Multimodal vehicular trajectory prediction using graph goal conditioning and cross-context attention
 
 ![](https://github.com/MahirGulzar/st_transformers_experiments/blob/main/assets/gcgat.gif)
