@@ -1,12 +1,12 @@
 [![PWC](https://img.shields.io/endpoint.svg?url=https://paperswithcode.com/badge/multimodal-trajectory-prediction-conditioned/trajectory-prediction-on-nuscenes)](https://paperswithcode.com/sota/trajectory-prediction-on-nuscenes?p=multimodal-trajectory-prediction-conditioned)
 
-# Multimodal Trajectory Prediction Conditioned on Lane-Graph Traversals
+# Gc-Gat: Multimodal vehicular trajectory prediction using graph goal conditioning and cross-context attention
 
-![](https://github.com/nachiket92/PGP/blob/main/assets/intro.gif)
-
-
+![](https://github.com/MahirGulzar/st_transformers_experiments/blob/main/assets/gcgat.gif)
 
 
+
+### [NOTE:]
 This repository contains code for ["Multimodal trajectory prediction conditioned on lane-graph traversals"](https://proceedings.mlr.press/v164/deo22a.html) by Nachiket Deo, Eric M. Wolff and Oscar Beijbom, presented at CoRL 2021.  
 
 ```bibtex
@@ -17,10 +17,6 @@ This repository contains code for ["Multimodal trajectory prediction conditioned
   year={2021}
 }
 ```
-
-
-**Note:** While I'm one of the authors of the paper, this is an independent re-implementation of the original code developed during an internship at Motional. The code follows the implementation details in the paper. Hope this helps!
- -Nachiket   
 
 
 ## Installation
