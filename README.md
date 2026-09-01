@@ -1,11 +1,22 @@
 # Gc-Gat: Multimodal vehicular trajectory prediction using graph goal conditioning and cross-context attention
+```bibtex
+@article{gulzar2025gc,
+  title={Gc-gat: Multimodal vehicular trajectory prediction using graph goal conditioning and cross-context attention},
+  author={Gulzar, Mahir and Muhammad, Yar and Muhammad, Naveed},
+  journal={IEEE Robotics and Automation Letters},
+  volume={10},
+  number={8},
+  pages={8316--8323},
+  year={2025},
+  publisher={IEEE}
+}
+```
 
 ![](https://github.com/MahirGulzar/st_transformers_experiments/blob/main/assets/gcgat.gif)
 
 
-
 ### [NOTE:]
-This repository contains code for ["Multimodal trajectory prediction conditioned on lane-graph traversals"](https://proceedings.mlr.press/v164/deo22a.html) by Nachiket Deo, Eric M. Wolff and Oscar Beijbom, presented at CoRL 2021.  
+This repository contains code from ["Multimodal trajectory prediction conditioned on lane-graph traversals"](https://proceedings.mlr.press/v164/deo22a.html) by Nachiket Deo, Eric M. Wolff and Oscar Beijbom, presented at CoRL 2021.  
 
 ```bibtex
 @inproceedings{deo2021multimodal,
